@@ -44,15 +44,23 @@
   - `setup.py` - Package definition with beta version
   - `__init__.py` - AksNetDiagnosticsCommandsLoader
   - `commands.py` - Command registration
-  - `_params.py` - Parameter definitions
+  - `_params.py` - Parameter definitions with accurate descriptions
   - `custom.py` - Command handler
   - `_client_factory.py` - Azure SDK client factories
-  - `_help.py` - Help documentation
+  - `_help.py` - Help documentation with accurate feature descriptions
 
-- [x] Created documentation files:
-  - `README.md` - User guide with installation and usage
-  - `HISTORY.rst` - v0.1.0b1 release notes
+- [x] Created documentation files (accurate and verified):
+  - `README.md` - Read-only tool disclaimer, accurate feature descriptions, permission requirements
+  - `HISTORY.rst` - v0.1.0b1 release notes with actual functionality
   - `CONTRIBUTING.md` - Development guidelines
+
+- [x] Documentation accuracy improvements:
+  - Clarified read-only analysis (no resource modifications)
+  - Explained user credential usage and permission handling
+  - Corrected DNS analyzer description (VNET DNS + private DNS zones, not CoreDNS)
+  - Removed incorrect claims (firewall rules, load balancer health probes)
+  - Clarified --probe-test functionality (DNS resolution + outbound connectivity from nodes)
+  - Updated severity levels to actual values (INFO, WARNING, ERROR, CRITICAL)
 
 - [x] Code quality validation:
   - Flake8: PASSED ✅
