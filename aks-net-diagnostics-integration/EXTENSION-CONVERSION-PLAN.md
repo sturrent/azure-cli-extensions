@@ -704,70 +704,92 @@ Since this is a POC in your fork (not in official Azure CLI), there's nothing to
   - **Estimated time:** 1 hour (includes validation)
   - **Status:** ✅ DONE - All imports updated and verified
 
-- [x] **Task 2.3:** Create extension-specific files (PARTIAL)
+- [x] **Task 2.3:** Create extension-specific files
   - [x] Create `azext_metadata.json` - ✅ DONE
-  - [x] Update `_version.py` to 0.1.0 - ✅ DONE
-  - [ ] Create `setup.py` - ⏳ PENDING
-  - [ ] Update `__init__.py` (loader) - ⏳ PENDING
-  - [ ] Create `commands.py` - ⏳ PENDING
-  - [ ] Create `_params.py` - ⏳ PENDING
-  - [ ] Create `custom.py` - ⏳ PENDING
-  - [ ] Create `_client_factory.py` - ⏳ PENDING
-  - [ ] Create `_help.py` - ⏳ PENDING
+  - [x] Update `_version.py` to 0.1.0b1 - ✅ DONE
+  - [x] Create `setup.py` - ✅ DONE
+  - [x] Update `__init__.py` (loader) - ✅ DONE
+  - [x] Create `commands.py` - ✅ DONE
+  - [x] Create `_params.py` - ✅ DONE
+  - [x] Create `custom.py` - ✅ DONE
+  - [x] Create `_client_factory.py` - ✅ DONE
+  - [x] Create `_help.py` - ✅ DONE
   - **Estimated time:** 2 hours
-  - **Status:** ⏳ IN PROGRESS (2/9 files created)
+  - **Status:** ✅ COMPLETE (9/9 files created)
 
-- [ ] **Task 2.4:** Create documentation files
-  - [ ] Create `README.md` - ⏳ PENDING
-  - [ ] Create `HISTORY.rst` - ⏳ PENDING
-  - [ ] Create `CONTRIBUTING.md` (optional) - ⏳ PENDING
+- [x] **Task 2.4:** Create documentation files
+  - [x] Create `README.md` - ✅ DONE (with read-only disclaimer and accurate features)
+  - [x] Create `HISTORY.rst` - ✅ DONE (with actual functionality described)
+  - [x] Create `CONTRIBUTING.md` - ✅ DONE
   - **Estimated time:** 1 hour
-  - **Status:** ⏳ PENDING
+  - **Status:** ✅ COMPLETE
+
+- [x] **Task 2.5:** Documentation accuracy improvements
+  - [x] Added read-only analysis disclaimer
+  - [x] Clarified permission requirements and user credential usage
+  - [x] Corrected DNS analyzer description (VNET DNS + private DNS zones)
+  - [x] Removed incorrect claims (firewall rules, load balancer health probes, CoreDNS)
+  - [x] Clarified --probe-test functionality (DNS + outbound connectivity from nodes)
+  - [x] Updated severity levels to actual values (INFO, WARNING, ERROR, CRITICAL)
+  - **Status:** ✅ COMPLETE
 
 ---
 
-### Phase 3: Local Testing (3-4 hours)
+### Phase 3: Local Testing (3-4 hours) ✅ COMPLETED
 
-- [ ] **Task 3.1:** Set up development environment
+- [x] **Task 3.1:** Set up development environment
   ```bash
   # Install azdev
   pip install azdev
   
   # Setup azdev for extensions
-  azdev setup -c /path/to/azure-cli -r /path/to/azure-cli-extensions
+  azdev setup -r /home/sturrent/gitrepos/azure-cli-extensions
   ```
   - **Estimated time:** 30 minutes
+  - **Status:** ✅ DONE - Python venv at ~/.virtualenvs/azdev, azdev 0.2.8, Azure CLI 2.79.0
 
-- [ ] **Task 3.2:** Install extension in dev mode
+- [x] **Task 3.2:** Install extension in dev mode
   ```bash
   azdev extension add aks-net-diagnostics
   ```
   - **Estimated time:** 15 minutes
+  - **Status:** ✅ DONE - Extension installed and working
 
-- [ ] **Task 3.3:** Run style and linter checks
+- [x] **Task 3.3:** Run style and linter checks
   ```bash
   azdev style aks-net-diagnostics
   azdev linter aks-net-diagnostics
   ```
   - **Goal:** Maintain 10.00/10 pylint score
   - **Estimated time:** 1 hour (fix any issues)
+  - **Status:** ✅ DONE - Flake8: PASSED, Pylint: PASSED
 
-- [ ] **Task 3.4:** Run existing tests
-  ```bash
-  azdev test aks-net-diagnostics
-  ```
-  - **Goal:** 100% test pass rate
+- [x] **Task 3.4:** Test with real AKS clusters
+  - **Clusters tested:** 3+ configurations (public, private with BYO DNS, clusters with NSG issues)
+  - **Tests performed:**
+    - Basic command execution ✅
+    - --details flag ✅
+    - --json-report flag ✅
+    - --probe-test flag (4 connectivity tests from nodes) ✅
+    - Combined flags ✅
+  - **Goal:** Verify all diagnostic functionality
   - **Estimated time:** 1 hour
+  - **Status:** ✅ DONE - All tests passed, see PHASE3-TEST-RESULTS.md
 
-- [ ] **Task 3.5:** Manual functional testing
-  - Test with real AKS clusters
-  - Verify all command-line flags
-  - Test edge cases
+- [x] **Task 3.5:** Validation results
+  - Network plugin detection accurate (Azure CNI, Azure CNI Overlay) ✅
+  - NSG analysis detecting actual blocking rules ✅
+  - Private DNS zone detection working ✅
+  - API server configuration analysis correct ✅
+  - Severity levels appropriate (INFO, WARNING, ERROR, CRITICAL) ✅
+  - Read-only operation confirmed ✅
+  - No critical bugs found ✅
   - **Estimated time:** 1 hour
+  - **Status:** ✅ COMPLETE - Extension production-ready for preview
 
 ---
 
-### Phase 4: Build & Package (1-2 hours)
+### Phase 4: Build & Package (1-2 hours) - PENDING
 
 - [ ] **Task 4.1:** Build extension wheel
   ```bash
