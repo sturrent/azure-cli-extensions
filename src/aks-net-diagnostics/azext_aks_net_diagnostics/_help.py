@@ -8,19 +8,20 @@ from knack.help_files import helps
 
 helps['aks net-diagnostics'] = """
     type: command
-    short-summary: Run comprehensive network diagnostics on an AKS cluster.
+    short-summary: Run comprehensive read-only network diagnostics on an AKS cluster.
     long-summary: |
-        Analyzes AKS cluster network configuration including:
-        - DNS resolution (CoreDNS and host DNS)
-        - Outbound connectivity
-        - Load balancer health probes
+        Performs read-only analysis of AKS cluster network configuration including:
+        - DNS resolution (VNET DNS configuration and private DNS zones)
+        - Outbound connectivity to required endpoints
         - Network Security Groups (NSGs)
         - Routes and routing tables
-        - Private DNS zones
+        - Private DNS zones (for private clusters)
         - Private Link resources
 
-        The diagnostic tool identifies common network misconfigurations and provides
-        actionable recommendations to resolve issues.
+        This tool does NOT modify any resources - all diagnostics are read-only analysis.
+
+        The tool runs using your Azure CLI credentials. Diagnostic checks may be skipped
+        if you lack sufficient permissions, with clear indication of required roles in the output.
 
         This command is currently in preview and may change in future releases.
     examples:
@@ -30,7 +31,7 @@ helps['aks net-diagnostics'] = """
           text: az aks net-diagnostics --resource-group MyResourceGroup --name MyAKSCluster --details
         - name: Run diagnostics and save results as JSON
           text: az aks net-diagnostics --resource-group MyResourceGroup --name MyAKSCluster --json-report output.json
-        - name: Run diagnostics including health probe tests
+        - name: Run diagnostics with active connectivity tests from cluster nodes
           text: az aks net-diagnostics --resource-group MyResourceGroup --name MyAKSCluster --probe-test
         - name: Run full diagnostics with all options
           text: |

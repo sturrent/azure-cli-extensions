@@ -17,7 +17,7 @@ def load_arguments(self, _):
                         'configuration analysis.')
         c.argument('probe_test', options_list=['--probe-test'],
                    action='store_true',
-                   help='Enable active connectivity tests from cluster nodes. Requires '
-                        'Virtual Machine Contributor permissions.')
+                   help='Run active DNS resolution and outbound connectivity tests from cluster nodes. '
+                        'Requires Virtual Machine Contributor permissions.')
         c.argument('json_report', options_list=['--json-report'],
                    help='Path to save JSON diagnostic report.')

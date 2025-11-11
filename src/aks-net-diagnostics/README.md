@@ -8,13 +8,30 @@ This is an extension for the Azure CLI to provide comprehensive network diagnost
 
 This extension is currently in **preview**. Features and commands may change in future releases. Use in production environments at your own discretion.
 
+## 🔍 Read-Only Analysis
+
+**This tool performs read-only analysis only** - it will not modify any resources or configurations in your AKS cluster or Azure environment. All diagnostics are performed by analyzing existing configurations and resources.
+
+## 🔐 Permission Requirements
+
+The diagnostic tool runs using **your Azure CLI credentials** and requires specific permissions to access cluster and network resources. Depending on your role assignments and the cluster's configuration:
+
+- Some diagnostic checks may be skipped if you lack sufficient permissions
+- The tool will clearly indicate which checks were skipped and what permissions are needed
+- For complete diagnostics, ensure you have read permissions on the cluster, network, compute, and private DNS resources
+
+**Recommended minimum permissions:**
+- `Microsoft.ContainerService/managedClusters/read`
+- `Microsoft.Network/*/read`
+- `Microsoft.Compute/*/read`
+- `Microsoft.Network/privateDnsZones/read`
+
 ## Features
 
 The `aks-net-diagnostics` extension analyzes multiple aspects of AKS cluster networking:
 
-- **DNS Resolution**: Validates CoreDNS configuration and host DNS settings
-- **Outbound Connectivity**: Tests cluster internet egress and validates firewall rules
-- **Load Balancer Health Probes**: Verifies Azure Load Balancer health probe configuration
+- **DNS Resolution**: Validates VNET DNS configuration and private DNS zones (when configured for private clusters)
+- **Outbound Connectivity**: Tests cluster internet egress and validates connectivity to required endpoints
 - **Network Security Groups (NSGs)**: Checks NSG rules affecting cluster communication
 - **Routes and Routing**: Analyzes route tables and custom routing configurations
 - **Private DNS Zones**: Validates private DNS zone configuration for private clusters
@@ -67,11 +84,13 @@ az aks net-diagnostics --resource-group MyResourceGroup --name MyAKSCluster --js
 
 ### Run Health Probe Tests
 
-Include load balancer health probe testing:
+Include active DNS resolution and outbound connectivity tests from cluster nodes:
 
 ```bash
 az aks net-diagnostics --resource-group MyResourceGroup --name MyAKSCluster --probe-test
 ```
+
+**Note:** The `--probe-test` option runs active connectivity tests from cluster nodes to validate DNS resolution and outbound connectivity to required endpoints. This requires Virtual Machine Contributor permissions.
 
 ### Full Diagnostics
 
@@ -100,48 +119,48 @@ Runs comprehensive network diagnostics on an AKS cluster.
 **Optional Arguments:**
 
 - `--details`: Show detailed diagnostic information
-- `--probe-test`: Run load balancer health probe tests
+- `--probe-test`: Run active DNS resolution and outbound connectivity tests from cluster nodes (requires Virtual Machine Contributor permissions)
 - `--json-report`: Path to save JSON diagnostic report
 
 ## Diagnostic Categories
 
 ### 1. DNS Analyzer
-- CoreDNS service status
-- CoreDNS configuration
-- DNS resolution tests
-- Host DNS configuration
+
+- VNET DNS server configuration
+- Private DNS zone validation (for private clusters)
+- DNS record verification
+- Zone link analysis
 
 ### 2. Outbound Connectivity Analyzer
+
 - Internet egress validation
-- Firewall rule checks
-- Proxy configuration
-- NAT gateway status
+- Connectivity to required Azure endpoints
+- Proxy configuration analysis
+- NAT gateway configuration
 
-### 3. Load Balancer Analyzer
-- Health probe configuration
-- Backend pool membership
-- Load balancing rules
-- Health probe test results (with `--probe-test`)
+### 3. Network Security Group (NSG) Analyzer
 
-### 4. Network Security Group (NSG) Analyzer
-- NSG rules affecting AKS
+- NSG rules affecting AKS cluster
 - Required rule validation
 - Rule priority analysis
 - Security recommendations
 
-### 5. Routes Analyzer
+### 4. Routes Analyzer
+
 - Route table configuration
-- Custom routes
-- System routes
-- Next hop validation
+- Custom routes analysis
+- System routes validation
+- Next hop verification
 
-### 6. Private DNS Analyzer
-- Private DNS zone configuration
-- DNS record validation
+### 5. Private DNS Analyzer
+
+- Private DNS zone configuration for private clusters
+- A-record validation
 - Zone link verification
-- VNET integration
+- VNET integration checks
 
-### 7. Private Link Analyzer
+### 6. Private Link Analyzer
+
 - Private endpoint status
 - Private link service configuration
 - Connection state validation
@@ -149,16 +168,18 @@ Runs comprehensive network diagnostics on an AKS cluster.
 
 ## Understanding Results
 
-The diagnostic tool provides results in three severity levels:
+The diagnostic tool provides results with the following severity levels:
 
-- **✅ PASS**: Configuration is correct
-- **⚠️ WARNING**: Potential issue detected, may need attention
-- **❌ FAIL**: Critical misconfiguration found, action required
+- **INFO**: Informational findings about your cluster configuration
+- **WARNING**: Potential issues that may need attention
+- **ERROR**: Configuration problems that could impact cluster functionality
+- **CRITICAL**: Severe misconfigurations requiring immediate action
 
 Each finding includes:
-- Category and severity
-- Detailed description
-- Affected resources
+
+- Category and severity level
+- Detailed description of the issue
+- Affected resources and their configurations
 - Recommended remediation steps
 
 ## Troubleshooting
@@ -175,10 +196,13 @@ az account show
 ### Permission Issues
 
 The diagnostic tool requires the following permissions:
+
 - `Microsoft.ContainerService/managedClusters/read`
 - `Microsoft.Network/*/read`
 - `Microsoft.Compute/*/read`
 - `Microsoft.Network/privateDnsZones/read`
+
+If you lack certain permissions, the tool will skip related checks and indicate what permissions are needed in the output.
 
 ### Extension Not Found
 
