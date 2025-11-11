@@ -42,9 +42,51 @@
 
 ---
 
-## ⏳ Next Steps (Phase 2 Continuation)
+## ⏳ Next Steps
 
-### Immediate Tasks (Next Session)
+### PREREQUISITE: Setup Development Environment (Phase 2.5 - NEW)
+
+**Status:** ⏳ PENDING  
+**Estimated time:** 15-30 minutes
+
+This is a **required** step before continuing with file creation.
+
+1. **Create Python virtual environment:**
+   ```bash
+   python3 -m venv ~/.virtualenvs/azdev
+   source ~/.virtualenvs/azdev/bin/activate
+   ```
+
+2. **Install azdev CLI:**
+   ```bash
+   pip install azdev
+   ```
+
+3. **Setup azdev with your extension:**
+   ```bash
+   azdev setup -r /home/sturrent/gitrepos/azure-cli-extensions -e aks-net-diagnostics
+   ```
+
+4. **Verify setup:**
+   ```bash
+   az --version  # Should show extension in dev mode with path
+   ```
+
+**Why this is critical:**
+- ✅ Automatically handles all Azure CLI core dependencies
+- ✅ Installs extension in dev mode (changes immediately testable)
+- ✅ Provides linting, testing, and building tools (`azdev style`, `azdev test`, `azdev linter`)
+- ✅ No manual dependency management needed
+- ✅ Required for Phase 3 testing
+
+**After azdev setup, you can immediately test your extension commands without rebuilding!**
+
+---
+
+### Phase 2 Continuation: Create Extension Files
+
+**Status:** ⏳ PENDING  
+**Estimated time:** 2-3 hours
 
 1. **Create remaining extension-specific files (7 files):**
    - [ ] `setup.py` - Package definition

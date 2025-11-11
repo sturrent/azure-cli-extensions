@@ -15,6 +15,11 @@ This follows the standard convention where:
 - Python code uses semantic version without prefix (0.1.0, 0.2.0)
 """
 
-__version__ = "0.1.0"
+# --------------------------------------------------------------------------------------------
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License. See License.txt in the project root for license information.
+# --------------------------------------------------------------------------------------------
+
+__version__ = "0.1.0b1"
 __author__ = "Azure AKS Network Diagnostics Team"
 __description__ = "Comprehensive read-only analysis of AKS cluster network configuration (Preview)"

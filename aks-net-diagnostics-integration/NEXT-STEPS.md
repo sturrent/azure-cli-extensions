@@ -10,6 +10,44 @@ cd /home/sturrent/gitrepos/azure-cli-extensions
 - ✅ `PROGRESS-SUMMARY.md` - Current progress and status
 - ✅ `src/aks-net-diagnostics/azext_aks_net_diagnostics/` - All 17 diagnostic modules copied
 
+## FIRST: Setup Development Environment (REQUIRED)
+
+### Step 1: Create Python Virtual Environment
+```bash
+# Create a dedicated virtual environment for azdev
+python3 -m venv ~/.virtualenvs/azdev
+source ~/.virtualenvs/azdev/bin/activate
+```
+
+### Step 2: Install azdev CLI
+```bash
+# Install Azure CLI development tools
+pip install azdev
+```
+
+### Step 3: Setup azdev with your extension
+```bash
+# Setup azdev pointing to your azure-cli-extensions fork
+# This will install Azure CLI in editable mode and link your extension
+azdev setup -r /home/sturrent/gitrepos/azure-cli-extensions -e aks-net-diagnostics
+```
+
+### Step 4: Verify Setup
+```bash
+# Check that Azure CLI and extension dev mode are working
+az --version
+
+# You should see your extension listed with a path indicating dev mode
+```
+
+**Why this is required:**
+- ✅ Handles all Azure CLI core dependencies automatically
+- ✅ Installs your extension in dev mode (changes immediately testable)
+- ✅ Provides tools for linting, testing, and building
+- ✅ No need to manually manage dependencies
+
+---
+
 ## Next: Create 7 Extension Files
 
 All templates are in `EXTENSION-CONVERSION-PLAN.md` section **"2. Files to Create (Extension-Specific)"**
