@@ -30,7 +30,12 @@ CLASSIFIERS = [
 
 # Dependencies already in azure-cli-core or azure-cli
 # Do NOT include: azure-cli-core, knack, etc. (already available)
-DEPENDENCIES = []
+DEPENDENCIES = [
+    'azure-mgmt-network~=30.0',
+    'azure-mgmt-compute~=33.0',
+    'azure-mgmt-containerservice~=33.0',
+    'azure-mgmt-privatedns~=1.1',
+]
 
 with open('README.md', 'r', encoding='utf-8') as f:
     README = f.read()
