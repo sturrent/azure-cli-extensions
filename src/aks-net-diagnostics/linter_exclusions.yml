@@ -1,0 +1,9 @@
+---
+# exclusions for the aks-net-diagnostics module
+# This is a preview/beta extension with manual testing completed
+# Automated tests will be added in a future release
+
+aks net-diagnostics:
+  rule_exclusions:
+    - missing_command_test_coverage
+    - missing_parameter_test_coverage
