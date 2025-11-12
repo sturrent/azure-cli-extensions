@@ -85,45 +85,28 @@
 - [x] Test results documented in PHASE3-TEST-RESULTS.md
 
 ### Phase 4: Build & Package (COMPLETE - 100%) ✅
-- [x] Built extension wheel: `aks_net_diagnostics-0.1.0b1-py3-none-any.whl` (87KB)
-- [x] Wheel contents verified (all 17 modules + metadata)
+- [x] Built extension wheel: `aks_net_diagnostics-0.1.0b1-py3-none-any.whl` (88KB with dependencies)
+- [x] Added Azure SDK dependencies to setup.py (azure-mgmt-network, azure-mgmt-compute, etc.)
+- [x] Wheel contents verified (all 17 modules + metadata + dependencies)
 - [x] Installed extension from wheel successfully
 - [x] Tested command execution from wheel installation
 - [x] Verified extension appears in `az extension list`
 - [x] Confirmed version: 0.1.0b1 (beta)
+- [x] Published GitHub Release: https://github.com/sturrent/azure-cli-extensions/releases/tag/aks-net-diagnostics-v0.1.0b1
+
+### Phase 4.5: Post-Release Enhancements (COMPLETE - 100%) ✅
+- [x] Added support for all Azure CLI output formats (json, yaml, tsv, table)
+- [x] Implemented automatic console suppression for non-table formats
+- [x] Optimized JSON generation (generate once, reuse for file and output)
+- [x] Optimized JSON structure (renamed keys for better alphabetical ordering)
+- [x] Removed unused `failure_analysis` field from codebase
+- [x] Updated README.md with output format documentation
+- [x] Created CHANGELOG.md documenting all enhancements
+- [x] Bumped version to 0.2.0b1 to reflect new features
 
 ---
 
 ## 🚀 Next Steps
-
----
-
-## ⏳ Next Steps
-
-### Phase 4: Build & Package (PENDING)
-
-**Status:** ⏳ READY TO START  
-**Estimated time:** 3-4 hours
-
-1. **Test with real AKS cluster:**
-   - Create test AKS cluster or use existing cluster
-   - Run `az aks net-diagnostics -g <rg> -n <cluster>`
-   - Test all options: `--details`, `--probe-test`, `--json-report`
-   - Verify diagnostic accuracy
-
-2. **Run comprehensive tests:**
-   - Execute `azdev test aks-net-diagnostics` (once tests are ported)
-   - Manual testing across different AKS configurations
-   - Test with private clusters, different CNI modes
-
-3. **Address any issues:**
-   - Fix bugs discovered during testing
-   - Refine diagnostic logic if needed
-   - Update documentation based on findings
-
----
-
-### Phase 4: Build & Package (PENDING)
 
 ---
 

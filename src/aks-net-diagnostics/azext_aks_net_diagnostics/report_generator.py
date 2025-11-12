@@ -36,7 +36,6 @@ class ReportGenerator:  # pylint: disable=too-many-instance-attributes
         vm_analysis: Optional[List[Dict[str, Any]]] = None,
         nsg_analysis: Dict[str, Any] = None,
         api_probe_results: Optional[Dict[str, Any]] = None,
-        failure_analysis: Optional[Dict[str, Any]] = None,
         script_version: str = "2.2.0",
         subnet_cidrs: Optional[Dict[str, str]] = None,
         logger: Optional[logging.Logger] = None,
@@ -61,7 +60,6 @@ class ReportGenerator:  # pylint: disable=too-many-instance-attributes
             vm_analysis: VM configuration analysis for Virtual Machines node pools
             nsg_analysis: NSG analysis results
             api_probe_results: API connectivity probe results
-            failure_analysis: Failure analysis results
             script_version: Script version number
             subnet_cidrs: Optional dict mapping subnet IDs to CIDRs
             logger: Optional logger instance
@@ -82,7 +80,6 @@ class ReportGenerator:  # pylint: disable=too-many-instance-attributes
         self.vm_analysis = vm_analysis or []
         self.nsg_analysis = nsg_analysis or {}
         self.api_probe_results = api_probe_results
-        self.failure_analysis = failure_analysis or {"enabled": False}
         self.script_version = script_version
         self.subnet_cidrs = subnet_cidrs or {}
         self.logger = logger or logging.getLogger(__name__)
@@ -146,7 +143,6 @@ class ReportGenerator:  # pylint: disable=too-many-instance-attributes
             },
             "results": {
                 "api_connectivity_probe": self.api_probe_results,
-                "failure_analysis": self.failure_analysis,
                 "findings": self.findings,
             },
         }

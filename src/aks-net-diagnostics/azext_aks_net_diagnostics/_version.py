@@ -6,13 +6,13 @@
 """Version information for AKS Network Diagnostics Extension
 
 Version Format:
-- Python package version: "0.1.0" (preview version, PEP 440 compliant)
-- Git tags: "v0.1.0" (with "v" prefix, Git convention)
-- GitHub releases: "v0.1.0" (with "v" prefix)
+- Python package version: "0.2.0" (preview version, PEP 440 compliant)
+- Git tags: "v0.2.0" (with "v" prefix, Git convention)
+- GitHub releases: "v0.2.0" (with "v" prefix)
 
 This follows the standard convention where:
-- Git uses v-prefix for tags (v0.1.0, v0.2.0)
-- Python code uses semantic version without prefix (0.1.0, 0.2.0)
+- Git uses v-prefix for tags (v0.2.0, v0.3.0)
+- Python code uses semantic version without prefix (0.2.0, 0.3.0)
 """
 
 # --------------------------------------------------------------------------------------------
@@ -20,6 +20,6 @@ This follows the standard convention where:
 # Licensed under the MIT License. See License.txt in the project root for license information.
 # --------------------------------------------------------------------------------------------
 
-__version__ = "0.1.0b1"
+__version__ = "0.2.0b1"
 __author__ = "Azure AKS Network Diagnostics Team"
 __description__ = "Comprehensive read-only analysis of AKS cluster network configuration (Preview)"

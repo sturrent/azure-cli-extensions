@@ -74,13 +74,35 @@ Get verbose diagnostic information:
 az aks net-diagnostics --resource-group MyResourceGroup --name MyAKSCluster --details
 ```
 
-### Save Results to JSON
+### Output Formats
 
-Export diagnostic results to a JSON file:
+The extension supports all standard Azure CLI output formats:
+
+```bash
+# Table format (default) - Human-readable console report with findings
+az aks net-diagnostics --resource-group MyResourceGroup --name MyAKSCluster
+
+# JSON format - Complete diagnostic data in JSON
+az aks net-diagnostics --resource-group MyResourceGroup --name MyAKSCluster -o json
+
+# YAML format - Complete diagnostic data in YAML
+az aks net-diagnostics --resource-group MyResourceGroup --name MyAKSCluster -o yaml
+
+# TSV format - Tab-separated values for scripting
+az aks net-diagnostics --resource-group MyResourceGroup --name MyAKSCluster -o tsv
+```
+
+**Note:** When using `-o json`, `-o yaml`, or `-o tsv`, the console report is suppressed and only the structured data is returned. The table format (default) shows the formatted console report with diagnostic findings.
+
+### Save Results to JSON File
+
+Export diagnostic results to a JSON file while still showing the console report:
 
 ```bash
 az aks net-diagnostics --resource-group MyResourceGroup --name MyAKSCluster --json-report output.json
 ```
+
+**Tip:** You can combine `--json-report` with any output format. For example, use `-o json --json-report output.json` to both return JSON to stdout and save to a file.
 
 ### Run Health Probe Tests
 

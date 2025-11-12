@@ -1,6 +1,18 @@
 Release History
 ===============
 
+0.2.0b1 (2025-11-12)
+++++++++++++++++++++
+
+**Feature Enhancements**
+
+* **Output Format Support**: Added full support for Azure CLI output formats (`-o json`, `-o yaml`, `-o tsv`, `-o table`)
+* Console report automatically suppressed when using non-table output formats
+* Optimized JSON generation for better performance (generate once, reuse for file and output)
+* Improved JSON structure with better key ordering (findings appear at end for easier visibility)
+* **Code Cleanup**: Removed unused `failure_analysis` field from JSON output
+* Updated documentation with output format usage examples
+
 0.1.0b1 (2025-01-XX)
 ++++++++++++++++++++
 

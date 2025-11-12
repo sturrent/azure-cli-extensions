@@ -559,7 +559,6 @@ def run_diagnostics(  # pylint: disable=too-many-locals
         vm_analysis=vm_analysis,
         nsg_analysis=nsg_analysis,
         api_probe_results=api_probe_results,
-        failure_analysis={"enabled": False},
         script_version=__version__,
         subnet_cidrs=subnet_cidrs,
         logger=logger
