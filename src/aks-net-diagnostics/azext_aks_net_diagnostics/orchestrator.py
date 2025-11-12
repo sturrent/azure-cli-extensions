@@ -8,7 +8,9 @@ AKS Network Diagnostics Orchestrator
 Adapted from aks-net-diagnostics tool (azure-sdk branch) for Azure CLI integration
 """
 
+import json
 import logging
+import os
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -282,7 +284,8 @@ def run_diagnostics(  # pylint: disable=too-many-locals
     details: bool = False,
     probe_test: bool = False,
     json_report_path: Optional[str] = None,
-    logger: Optional[logging.Logger] = None
+    logger: Optional[logging.Logger] = None,
+    suppress_console_output: bool = False
 ) -> Dict[str, Any]:
     """
     Run comprehensive network diagnostics on an AKS cluster.
@@ -311,6 +314,7 @@ def run_diagnostics(  # pylint: disable=too-many-locals
         probe_test: Enable active connectivity checks (executes commands on nodes)
         json_report_path: Path to save JSON report (if provided)
         logger: Optional logger instance
+        suppress_console_output: Suppress console report printing (for json/yaml output)
 
     Returns:
         Dictionary containing complete diagnostic results
@@ -561,18 +565,25 @@ def run_diagnostics(  # pylint: disable=too-many-locals
         logger=logger
     )
 
-    # Generate JSON report if requested
-    if json_report_path:
-        report_generator.save_json_report(json_report_path)
-
-    # Print console report
-    report_generator.print_console_report(
-        show_details=details,
-        json_report_path=json_report_path
-    )
-
-    # Return complete diagnostic data
+    # Generate JSON report data once
     result = report_generator.generate_json_report()
+
+    # Save JSON report if requested
+    if json_report_path:
+        try:
+            with open(json_report_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, indent=2)
+            os.chmod(json_report_path, 0o600)
+            logger.info("[DOC] JSON report saved to: %s", json_report_path)
+        except Exception as e:  # pylint: disable=broad-except
+            logger.error("Failed to save JSON report: %s", e)
+
+    # Print console report (unless suppressed for json/yaml output)
+    if not suppress_console_output:
+        report_generator.print_console_report(
+            show_details=details,
+            json_report_path=json_report_path
+        )
 
     logger.info("Diagnostic analysis complete")
 

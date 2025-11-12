@@ -95,6 +95,7 @@ class ReportGenerator:  # pylint: disable=too-many-instance-attributes
         Returns:
             Dictionary containing complete report data
         """
+        # Use key names that sort alphabetically to put findings last
         return {
             "metadata": {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -123,7 +124,7 @@ class ReportGenerator:  # pylint: disable=too-many-instance-attributes
                     {}
                 ),
             },
-            "networking": {
+            "network_configuration": {
                 "vnets": self.vnets_analysis,
                 "outbound": self.outbound_analysis,
                 "private_dns": self.private_dns_analysis,
@@ -143,7 +144,7 @@ class ReportGenerator:  # pylint: disable=too-many-instance-attributes
                     ),
                 },
             },
-            "diagnostics": {
+            "results": {
                 "api_connectivity_probe": self.api_probe_results,
                 "failure_analysis": self.failure_analysis,
                 "findings": self.findings,

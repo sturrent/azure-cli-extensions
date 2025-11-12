@@ -48,6 +48,13 @@ def aks_net_diagnostics(cmd, client, resource_group_name, name,
     compute_client = cf_compute_client(cmd.cli_ctx)
     privatedns_client = cf_privatedns_client(cmd.cli_ctx)
 
+    # Detect output format from CLI context
+    # Azure CLI stores output format in cli_ctx.config
+    output_format = cmd.cli_ctx.invocation.data.get('output', 'table')
+
+    # For non-table formats (json, yaml, tsv), suppress console printing
+    suppress_console = output_format != 'table'
+
     # Run diagnostics
     result = run_diagnostics(
         aks_client=aks_client,
@@ -62,7 +69,8 @@ def aks_net_diagnostics(cmd, client, resource_group_name, name,
         details=details,
         probe_test=probe_test,
         json_report_path=json_report,
-        logger=logger
+        logger=logger,
+        suppress_console_output=suppress_console
     )
 
     return result
