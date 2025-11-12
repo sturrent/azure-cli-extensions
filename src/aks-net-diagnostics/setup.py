@@ -30,11 +30,12 @@ CLASSIFIERS = [
 
 # Dependencies already in azure-cli-core or azure-cli
 # Do NOT include: azure-cli-core, knack, etc. (already available)
+# Versions aligned with Azure CLI 2.79.0
 DEPENDENCIES = [
-    'azure-mgmt-network~=30.0',
-    'azure-mgmt-compute~=33.0',
-    'azure-mgmt-containerservice~=33.0',
-    'azure-mgmt-privatedns~=1.1',
+    'azure-mgmt-network~=25.0',
+    'azure-mgmt-compute~=34.1',
+    'azure-mgmt-containerservice~=40.1',
+    'azure-mgmt-privatedns~=1.0',
 ]
 
 with open('README.md', 'r', encoding='utf-8') as f:
