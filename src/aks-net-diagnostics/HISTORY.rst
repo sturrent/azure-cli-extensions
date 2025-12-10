@@ -13,7 +13,7 @@ Release History
 * **Code Cleanup**: Removed unused `failure_analysis` field from JSON output
 * Updated documentation with output format usage examples
 
-0.1.0b1 (2025-01-XX)
+0.1.0b1 (2025-11-11)
 ++++++++++++++++++++
 
 **Initial Preview Release**

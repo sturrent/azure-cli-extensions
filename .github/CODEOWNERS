@@ -338,4 +338,6 @@
 
 /src/aks-agent/ @feiskyer @mainred @nilo19
 
+/src/aks-net-diagnostics/ @sturrent
+
 /src/migrate/ @saifaldin14
