@@ -127,3 +127,6 @@ _az_debug/
 
 # Ignore test results
 test_results.xml
+
+# Private/confidential PRD documents
+aks-net-diagnostics-integration/private-cluster-prd.md
