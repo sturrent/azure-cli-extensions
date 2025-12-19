@@ -12,6 +12,16 @@ To release a new version, please select a new version number (usually plus 1 to 
 Pending
 +++++++
 
+1.0.0b14
+* Fix: set stdout to blocking mode to avoid "BlockingIOError: [Errno 35] write could not complete without blocking"
+* Fix: gracefully handle the connection reset error
+* Fix: correct the prompt to user `az aks agent-init` to initialize the aks agent
+* Fix: dont echo the user input for Linux users
+* Close websocket and restore terminal settings after `az aks agent` ends
+
+1.0.0b13
+* Fix subscription id not correctly set in helm chart
+
 1.0.0b12
 ++++++++
 * [BREAKING CHANGE]:
