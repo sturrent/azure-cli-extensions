@@ -56136,6 +56136,48 @@
                     "version": "1.1.0"
                 },
                 "sha256Digest": "24ec8eaa246d32c72a60f258561f03f4734c0778aba797aa62cd7d812b7d45b2"
+            },
+            {
+                "downloadUrl": "https://azcliprod.blob.core.windows.net/cli-extensions/databricks-1.2.0-py3-none-any.whl",
+                "filename": "databricks-1.2.0-py3-none-any.whl",
+                "metadata": {
+                    "azext.minCliCoreVersion": "2.57.0",
+                    "classifiers": [
+                        "Development Status :: 4 - Beta",
+                        "Intended Audience :: Developers",
+                        "Intended Audience :: System Administrators",
+                        "Programming Language :: Python",
+                        "Programming Language :: Python :: 3",
+                        "Programming Language :: Python :: 3.6",
+                        "Programming Language :: Python :: 3.7",
+                        "Programming Language :: Python :: 3.8",
+                        "License :: OSI Approved :: MIT License"
+                    ],
+                    "extensions": {
+                        "python.details": {
+                            "contacts": [
+                                {
+                                    "email": "azpycli@microsoft.com",
+                                    "name": "Microsoft Corporation",
+                                    "role": "author"
+                                }
+                            ],
+                            "document_names": {
+                                "description": "DESCRIPTION.rst"
+                            },
+                            "project_urls": {
+                                "Home": "https://github.com/Azure/azure-cli-extensions/tree/main/src/databricks"
+                            }
+                        }
+                    },
+                    "generator": "bdist_wheel (0.30.0)",
+                    "license": "MIT",
+                    "metadata_version": "2.0",
+                    "name": "databricks",
+                    "summary": "Microsoft Azure Command-Line Tools DatabricksClient Extension",
+                    "version": "1.2.0"
+                },
+                "sha256Digest": "dd975ba7e38fee681743c7128e27526daf013bc901e01c75a56c321450feed8c"
             }
         ],
         "datadog": [
@@ -77423,6 +77465,51 @@
                     "version": "3.0.0b1"
                 },
                 "sha256Digest": "feef0329735ff794e8e7a00c337766e1e5ee7925bb2729508335bf7c18aa0745"
+            },
+            {
+                "downloadUrl": "https://azcliprod.blob.core.windows.net/cli-extensions/migrate-3.0.0b2-py3-none-any.whl",
+                "filename": "migrate-3.0.0b2-py3-none-any.whl",
+                "metadata": {
+                    "azext.isPreview": true,
+                    "azext.minCliCoreVersion": "2.75.0",
+                    "classifiers": [
+                        "Development Status :: 4 - Beta",
+                        "Intended Audience :: Developers",
+                        "Intended Audience :: System Administrators",
+                        "Programming Language :: Python",
+                        "Programming Language :: Python :: 2",
+                        "Programming Language :: Python :: 2.7",
+                        "Programming Language :: Python :: 3",
+                        "Programming Language :: Python :: 3.4",
+                        "Programming Language :: Python :: 3.5",
+                        "Programming Language :: Python :: 3.6",
+                        "License :: OSI Approved :: MIT License"
+                    ],
+                    "extensions": {
+                        "python.details": {
+                            "contacts": [
+                                {
+                                    "email": "saifaldinali@microsoft.com",
+                                    "name": "Saif Al-Din Ali",
+                                    "role": "author"
+                                }
+                            ],
+                            "document_names": {
+                                "description": "DESCRIPTION.rst"
+                            },
+                            "project_urls": {
+                                "Home": "https://github.com/Azure/azure-cli-extensions/tree/main/src/migrate"
+                            }
+                        }
+                    },
+                    "generator": "bdist_wheel (0.30.0)",
+                    "license": "MIT",
+                    "metadata_version": "2.0",
+                    "name": "migrate",
+                    "summary": "Support for Azure Migrate preview",
+                    "version": "3.0.0b2"
+                },
+                "sha256Digest": "512849b5a4f281e75781c2130d44ad1f73c0871caf141b7032eb73fef609facf"
             }
         ],
         "mixed-reality": [
@@ -87297,6 +87384,49 @@
                     "version": "2.0.0b1"
                 },
                 "sha256Digest": "be37708f6e911b51e56ad15f37f26a87904e6d2250d5698cf0358be646c3deea"
+            },
+            {
+                "downloadUrl": "https://azcliprod.blob.core.windows.net/cli-extensions/notification_hub-2.0.0b2-py3-none-any.whl",
+                "filename": "notification_hub-2.0.0b2-py3-none-any.whl",
+                "metadata": {
+                    "azext.isPreview": true,
+                    "azext.minCliCoreVersion": "2.67.0",
+                    "classifiers": [
+                        "Development Status :: 4 - Beta",
+                        "Intended Audience :: Developers",
+                        "Intended Audience :: System Administrators",
+                        "Programming Language :: Python",
+                        "Programming Language :: Python :: 3",
+                        "Programming Language :: Python :: 3.6",
+                        "Programming Language :: Python :: 3.7",
+                        "Programming Language :: Python :: 3.8",
+                        "License :: OSI Approved :: MIT License"
+                    ],
+                    "extensions": {
+                        "python.details": {
+                            "contacts": [
+                                {
+                                    "email": "azpycli@microsoft.com",
+                                    "name": "Microsoft Corporation",
+                                    "role": "author"
+                                }
+                            ],
+                            "document_names": {
+                                "description": "DESCRIPTION.rst"
+                            },
+                            "project_urls": {
+                                "Home": "https://github.com/Azure/azure-cli-extensions/tree/main/src/notification-hub"
+                            }
+                        }
+                    },
+                    "generator": "bdist_wheel (0.30.0)",
+                    "license": "MIT",
+                    "metadata_version": "2.0",
+                    "name": "notification-hub",
+                    "summary": "Microsoft Azure Command-Line Tools Notification Hub Extension",
+                    "version": "2.0.0b2"
+                },
+                "sha256Digest": "f0fc4e3d34b56101a8e667630270e8e6e538e033e21bffd27ee1215834bbc9f4"
             }
         ],
         "nsp": [
@@ -89165,6 +89295,49 @@
                     "version": "1.0.0b1"
                 },
                 "sha256Digest": "688a1bbb0adfd73ef6814cd864b2c8ce4d6646bb1b21f5a5c60a5f27ed67db45"
+            },
+            {
+                "downloadUrl": "https://azcliprod.blob.core.windows.net/cli-extensions/pscloud-1.0.0-py3-none-any.whl",
+                "filename": "pscloud-1.0.0-py3-none-any.whl",
+                "metadata": {
+                    "azext.isPreview": true,
+                    "azext.minCliCoreVersion": "2.75.0",
+                    "classifiers": [
+                        "Development Status :: 4 - Beta",
+                        "Intended Audience :: Developers",
+                        "Intended Audience :: System Administrators",
+                        "Programming Language :: Python",
+                        "Programming Language :: Python :: 3",
+                        "Programming Language :: Python :: 3.7",
+                        "Programming Language :: Python :: 3.8",
+                        "Programming Language :: Python :: 3.9",
+                        "License :: OSI Approved :: MIT License"
+                    ],
+                    "extensions": {
+                        "python.details": {
+                            "contacts": [
+                                {
+                                    "email": "azpycli@microsoft.com",
+                                    "name": "Microsoft Corporation",
+                                    "role": "author"
+                                }
+                            ],
+                            "document_names": {
+                                "description": "DESCRIPTION.rst"
+                            },
+                            "project_urls": {
+                                "Home": "https://github.com/Azure/azure-cli-extensions/tree/main/src/pscloud"
+                            }
+                        }
+                    },
+                    "generator": "bdist_wheel (0.30.0)",
+                    "license": "MIT",
+                    "metadata_version": "2.0",
+                    "name": "pscloud",
+                    "summary": "Microsoft Azure Command-Line Tools Pscloud Extension.",
+                    "version": "1.0.0"
+                },
+                "sha256Digest": "a31751371c3b643cec53d0b83e195f51924b4c1a6302b84750c945543002163f"
             }
         ],
         "purview": [
@@ -103511,6 +103684,48 @@
                     "version": "1.11.3"
                 },
                 "sha256Digest": "22713b14e8092adebcfbd9696ac91886920dc4b011d95ac829d01b2adee104ec"
+            },
+            {
+                "downloadUrl": "https://hciarcvmsstorage.z13.web.core.windows.net/cli-extensions/stack_hci_vm-1.11.6-py3-none-any.whl",
+                "filename": "stack_hci_vm-1.11.6-py3-none-any.whl",
+                "metadata": {
+                    "azext.minCliCoreVersion": "2.15.0",
+                    "classifiers": [
+                        "Development Status :: 4 - Beta",
+                        "Intended Audience :: Developers",
+                        "Intended Audience :: System Administrators",
+                        "Programming Language :: Python",
+                        "Programming Language :: Python :: 3",
+                        "Programming Language :: Python :: 3.6",
+                        "Programming Language :: Python :: 3.7",
+                        "Programming Language :: Python :: 3.8",
+                        "License :: OSI Approved :: MIT License"
+                    ],
+                    "extensions": {
+                        "python.details": {
+                            "contacts": [
+                                {
+                                    "email": "azpycli@microsoft.com",
+                                    "name": "Microsoft Corporation",
+                                    "role": "author"
+                                }
+                            ],
+                            "document_names": {
+                                "description": "DESCRIPTION.rst"
+                            },
+                            "project_urls": {
+                                "Home": "https://github.com/Azure/azure-cli-extensions/tree/master/src/stack-hci-vm"
+                            }
+                        }
+                    },
+                    "generator": "bdist_wheel (0.30.0)",
+                    "license": "MIT",
+                    "metadata_version": "2.0",
+                    "name": "stack-hci-vm",
+                    "summary": "Microsoft Azure Command-Line Tools Stack-HCi-VM Extension",
+                    "version": "1.11.6"
+                },
+                "sha256Digest": "2722c4ad240b4b470c28295273dabdee07700ad7ebd17da295c3f812e13457ad"
             }
         ],
         "standbypool": [
@@ -114070,6 +114285,49 @@
                     "version": "4.2.0"
                 },
                 "sha256Digest": "825fbc61f7adc4b800294cef7a18a11c61964cba62d13e7b2ca4739aec2f5b0c"
+            },
+            {
+                "downloadUrl": "https://azcliprod.blob.core.windows.net/cli-extensions/workload_orchestration-5.0.0-py3-none-any.whl",
+                "filename": "workload_orchestration-5.0.0-py3-none-any.whl",
+                "metadata": {
+                    "azext.isPreview": false,
+                    "azext.minCliCoreVersion": "2.67.0",
+                    "classifiers": [
+                        "Development Status :: 5 - Production/Stable",
+                        "Intended Audience :: Developers",
+                        "Intended Audience :: System Administrators",
+                        "Programming Language :: Python",
+                        "Programming Language :: Python :: 3",
+                        "Programming Language :: Python :: 3.7",
+                        "Programming Language :: Python :: 3.8",
+                        "Programming Language :: Python :: 3.9",
+                        "License :: OSI Approved :: MIT License"
+                    ],
+                    "extensions": {
+                        "python.details": {
+                            "contacts": [
+                                {
+                                    "email": "azpycli@microsoft.com",
+                                    "name": "Microsoft Corporation",
+                                    "role": "author"
+                                }
+                            ],
+                            "document_names": {
+                                "description": "DESCRIPTION.rst"
+                            },
+                            "project_urls": {
+                                "Home": "https://github.com/Azure/azure-cli-extensions/tree/main/src/workload-orchestration"
+                            }
+                        }
+                    },
+                    "generator": "bdist_wheel (0.30.0)",
+                    "license": "MIT",
+                    "metadata_version": "2.0",
+                    "name": "workload-orchestration",
+                    "summary": "Microsoft Azure Command-Line Tools WorkloadOperations Extension.",
+                    "version": "5.0.0"
+                },
+                "sha256Digest": "1e9f18e74147c11ecbfb63174c45b54172cc6496bc794ab04028be07414fa285"
             }
         ],
         "workloads": [
