@@ -1,6 +1,15 @@
 Release History
 ===============
 
+0.2.0b2 (2026-02-18)
+++++++++++++++++++++
+
+**Bug Fixes**
+
+* Fixed ``ModuleNotFoundError: azure.mgmt.network`` when running with Azure CLI 2.83+
+* Removed unnecessary pinned SDK dependencies (compute, containerservice, privatedns) that are bundled with Azure CLI
+* Only ``azure-mgmt-network`` is declared as an explicit dependency since it is no longer bundled in Azure CLI 2.83+
+
 0.2.0b1 (2025-11-12)
 ++++++++++++++++++++
 

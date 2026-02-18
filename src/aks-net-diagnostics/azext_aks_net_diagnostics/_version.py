@@ -20,6 +20,6 @@ This follows the standard convention where:
 # Licensed under the MIT License. See License.txt in the project root for license information.
 # --------------------------------------------------------------------------------------------
 
-__version__ = "0.2.0b1"
+__version__ = "0.2.0b2"
 __author__ = "Azure AKS Network Diagnostics Team"
 __description__ = "Comprehensive read-only analysis of AKS cluster network configuration (Preview)"
