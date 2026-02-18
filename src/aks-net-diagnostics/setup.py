@@ -28,11 +28,14 @@ CLASSIFIERS = [
     'License :: OSI Approved :: MIT License',
 ]
 
-# These Azure SDK packages are already bundled with Azure CLI.
-# Do NOT pin versions here — let the extension use whatever the CLI ships.
-# This avoids version conflicts when Azure CLI updates its bundled SDKs.
-# See: aks-preview, azure-firewall, front-door, bastion (all use DEPENDENCIES = [])
-DEPENDENCIES = []
+# Most Azure SDK packages (compute, containerservice, privatedns) are bundled
+# with Azure CLI and should NOT be pinned here.
+# However, azure-mgmt-network is NOT bundled in Azure CLI 2.83+ (the `az network`
+# commands use a separate packaging model), so it must be declared explicitly.
+# Use compatible-release (~=) on the major version to allow minor/patch updates.
+DEPENDENCIES = [
+    'azure-mgmt-network~=25.0',
+]
 
 with open('README.md', 'r', encoding='utf-8') as f:
     README = f.read()
