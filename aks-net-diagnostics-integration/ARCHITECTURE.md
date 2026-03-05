@@ -58,61 +58,25 @@ The extension model (Stage 4) eliminates all of these: the diagnostic engine liv
 
 ```mermaid
 flowchart TD
-    subgraph CLI["Azure CLI Framework"]
-        CMD["az aks net-diagnostics -n cluster -g rg<br/>--details / --probe-test / --json-report"]
-    end
+    CMD["az aks net-diagnostics -n cluster -g rg<br/>--details / --probe-test / --json-report"]
 
     subgraph EXT["Extension: aks-net-diagnostics"]
-        direction TB
-        subgraph ADAPTER["CLI Adapter Layer"]
-            INIT["__init__.py<br/>(loader)"] --> CUSTOM["custom.py<br/>(handler)"]
-            COMMANDS["commands.py"] --> CUSTOM
-            PARAMS["_params.py"] --> CUSTOM
-            FACTORY["_client_factory.py"] --> CUSTOM
-        end
-
-        CUSTOM --> ORCH
-
-        subgraph ENGINE["Diagnostic Engine"]
-            ORCH["orchestrator.py<br/>run_diagnostics()"]
-            ORCH --> P1["Phase 1: Cluster data collection"]
-            ORCH --> P2["Phase 2: VNet analysis + node network config"]
-            ORCH --> P3["Phase 3: Route table / UDR analysis"]
-            ORCH --> P4["Phase 4: Outbound connectivity analysis"]
-            ORCH --> P5["Phase 5: NSG analysis"]
-            ORCH --> P6["Phase 6: DNS configuration analysis"]
-            ORCH --> P7["Phase 7: API server access analysis"]
-            ORCH --> P8["Phase 8: Connectivity tests (optional)"]
-            ORCH --> P9["Phase 9: Misconfiguration correlation"]
-            ORCH --> P10["Phase 10: Report generation"]
-        end
-
-        subgraph MODULES["Diagnostic Engine Modules"]
-            cluster_data_collector
-            nsg_analyzer
-            dns_analyzer
-            route_table_analyzer
-            outbound_analyzer
-            api_server_analyzer
-            connectivity_tester
-            misconfiguration_analyzer
-            report_generator
-            base_analyzer
-            models
-            exceptions
-            validators
-        end
+        ADAPTER["CLI Adapter Layer<br/>__init__.py, commands.py, _params.py,<br/>_client_factory.py, custom.py"]
+        ORCH["Orchestrator<br/>10-phase sequential workflow"]
+        ANALYZERS["Analyzers<br/>NSG, DNS, Routes, Outbound,<br/>API Server, Connectivity, Misconfiguration"]
+        REPORT["Report Generator<br/>Console + JSON output"]
     end
 
-    subgraph ARM["Azure Resource Manager"]
-        CS["ContainerService<br/>AKS + AgentPools"]
-        NET["Network<br/>VNets, NSGs, Routes,<br/>LBs, NatGW"]
-        CMP["Compute<br/>VMSS, VMs, RunCmd"]
-        PDNS["PrivateDNS<br/>Zones, VNet links"]
-    end
+    CS["ContainerService<br/>AKS + AgentPools"]
+    NET["Network<br/>VNets, NSGs, Routes, LBs, NatGW"]
+    CMP["Compute<br/>VMSS, VMs, RunCommand"]
+    PDNS["PrivateDNS<br/>Zones, VNet links"]
 
-    CMD --> EXT
-    EXT --> ARM
+    CMD --> ADAPTER
+    ADAPTER --> ORCH
+    ORCH --> ANALYZERS
+    ANALYZERS --> REPORT
+    ANALYZERS --> CS & NET & CMP & PDNS
 ```
 
 ## Extension Structure
