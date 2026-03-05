@@ -60,11 +60,12 @@ The extension model (Stage 4) eliminates all of these: the diagnostic engine liv
 flowchart TD
     CMD["az aks net-diagnostics -n cluster -g rg<br/>--details / --probe-test / --json-report"]
 
-    subgraph EXT["Extension: aks-net-diagnostics"]
+    subgraph EXT[" "]
+        direction TB
         ADAPTER["CLI Adapter Layer<br/>__init__.py, commands.py, _params.py,<br/>_client_factory.py, custom.py"]
-        ORCH["Orchestrator<br/>10-phase sequential workflow"]
-        ANALYZERS["Analyzers<br/>NSG, DNS, Routes, Outbound,<br/>API Server, Connectivity, Misconfiguration"]
-        REPORT["Report Generator<br/>Console + JSON output"]
+        ADAPTER --> ORCH["Orchestrator<br/>10-phase sequential workflow"]
+        ORCH --> ANALYZERS["Analyzers<br/>NSG, DNS, Routes, Outbound,<br/>API Server, Connectivity, Misconfiguration"]
+        ANALYZERS --> REPORT["Report Generator<br/>Console + JSON output"]
     end
 
     CS["ContainerService<br/>AKS + AgentPools"]
@@ -73,9 +74,6 @@ flowchart TD
     PDNS["PrivateDNS<br/>Zones, VNet links"]
 
     CMD --> ADAPTER
-    ADAPTER --> ORCH
-    ORCH --> ANALYZERS
-    ANALYZERS --> REPORT
     ANALYZERS --> CS & NET & CMP & PDNS
 ```
 
