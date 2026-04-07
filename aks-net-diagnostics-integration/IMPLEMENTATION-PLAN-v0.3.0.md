@@ -6,6 +6,27 @@
 
 ---
 
+## Progress Summary
+
+| Work Item | Status | Commits | Live Tested |
+|-----------|--------|---------|-------------|
+| WI-5: defaultOutboundAccess | **Done** | `795efbd`, `14c4ed4` | Managed + BYO VNet |
+| WI-1: Outbound none/block | **Done** | `876816c`, `dc30e91` | Managed (block) + BYO (none) |
+| WI-2: HTTP proxy awareness | **Done** | `bd89d64` | Not live-tested (no proxy cluster) |
+| WI-3: Service tags | Not started | -- | -- |
+| WI-4: NAP detection | Not started | -- | -- |
+| Enhancement: Probe tests for network isolation | **Done** | `6262ae2` | Managed (block) + BYO (none) |
+| Enhancement: NSG analyzer for network isolation | **Done** | `6a7e416` | Managed (block) + BYO (none) |
+| Enhancement: Bootstrap ACR private DNS VNet link | **Done** | `f27f056` | Managed (block) + BYO (none) |
+| Enhancement: Suppress noisy CLI findings | **Done** | `11a2f65` | Managed (block) + BYO (none) |
+| Doc updates | **Done** | `1c32e53`, `cceca6c` | -- |
+
+**Test clusters used:**
+- `aks-wi1-managed` (managed VNet, AKS-managed ACR, outbound: block) in `aks-wi1-test-rg`
+- `aks-wi1-byo` (BYO VNet `wi1-test-vnet`, BYO ACR `akswi1byoacr`, outbound: none) in `aks-wi1-test-rg`
+
+---
+
 ## Scope
 
 This release closes the high-priority gaps identified in the functionality and gaps analysis. Medium and low-priority gaps (dual-stack/IPv6, Virtual Nodes/ACI, LocalDNS, custom endpoint testing) are deferred to a future release.
@@ -14,93 +35,49 @@ This release closes the high-priority gaps identified in the functionality and g
 
 ## Work Items
 
-### WI-1: Outbound Type `none` and `block`
+### WI-1: Outbound Type `none` and `block` — ✅ IMPLEMENTED
+
+**Status:** Implemented (`876816c`), design-reviewed and refined (`dc30e91`), live-tested on both managed VNet (block) and BYO VNet (none) clusters.
 
 **Goal:** Recognize `none` and `block` outbound types, suppress false outbound findings, and validate bootstrap ACR configuration for network isolated clusters.
 
-**Files to modify:**
-- `outbound_analyzer.py` -- outbound type dispatch and effective outbound logic
-- `models.py` -- new FindingCode values
-- `cluster_data_collector.py` -- read `bootstrapProfile` from cluster properties
+**Files modified:**
+- `outbound_analyzer.py` -- outbound type dispatch, `_analyze_none_outbound()`, `_analyze_block_outbound()`
+- `models.py` -- `OUTBOUND_TYPE_NONE`, `OUTBOUND_TYPE_BLOCK`, `OUTBOUND_TYPE_UNSUPPORTED`, `BOOTSTRAP_ACR_MISSING`
 
-**Implementation:**
+**What was implemented:**
+1. Outbound type dispatch with `none` → `_analyze_none_outbound()`, `block` → `_analyze_block_outbound()`, and `else` for unrecognized types
+2. `_analyze_none_outbound()`: INFO finding, checks bootstrap ACR presence, WARNING if missing
+3. `_analyze_block_outbound()`: INFO finding, CRITICAL if bootstrap ACR missing (block requires it)
+4. `_determine_effective_outbound()` updated for `none` ("user-managed") and `block` ("blocked by AKS")
+5. Bootstrap profile read from `cluster_info["bootstrap_profile"]["container_registry_id"]`
 
-1. **Add outbound type dispatch** (`outbound_analyzer.py`, `analyze()` around line 135):
-   - Add `elif outbound_type == "none":` branch calling new `_analyze_none_outbound()`
-   - Add `elif outbound_type == "block":` branch calling new `_analyze_block_outbound()`
-   - Add final `else:` clause to catch future unrecognized types with an INFO finding
+**Design decision:** `NO_EXPLICIT_OUTBOUND_MECHANISM` warning was initially added then deliberately removed (`dc30e91`). Outbound types `none`/`block` are intentional configurations; warning about "no egress mechanism" produces false positives.
 
-2. **New handler: `_analyze_none_outbound()`**:
-   - Report that the cluster has no AKS-managed egress
-   - Suppress MCR/Azure service reachability warnings (user manages egress)
-   - Check for `bootstrapProfile.containerRegistryResourceId` -- if present, report bootstrap ACR details
-   - If no bootstrap ACR and no UDR, emit WARNING about potential lack of egress
-
-3. **New handler: `_analyze_block_outbound()`**:
-   - Report that AKS actively blocks all egress
-   - Require `bootstrapProfile` -- if missing, emit CRITICAL finding
-   - Suppress all outbound reachability checks (MCR, Azure services)
-
-4. **Update `_determine_effective_outbound()`** (line 167-304):
-   - Add cases for `none` and `block`
-   - For `none`: effective outbound is "user-managed" or "no egress"
-   - For `block`: effective outbound is "blocked by AKS"
-
-5. **Read bootstrap profile** (`cluster_data_collector.py`):
-   - Extract `bootstrap_profile` from cluster network profile
-   - Store `containerRegistryResourceId` in `cluster_info`
-
-6. **New FindingCode values** (`models.py`):
-   - `OUTBOUND_TYPE_NONE` -- informational, cluster uses outbound type none
-   - `OUTBOUND_TYPE_BLOCK` -- informational, cluster uses outbound type block
-   - `OUTBOUND_TYPE_UNSUPPORTED` -- unrecognized outbound type
-   - `BOOTSTRAP_ACR_MISSING` -- network isolated cluster without bootstrap ACR
-
-**Testing:**
-- Unit test with `outbound_type: "none"` cluster profile, verify no false MCR/Azure findings
-- Unit test with `outbound_type: "block"` and missing bootstrap ACR, verify CRITICAL finding
-- Unit test with unrecognized outbound type, verify INFO finding
+**Live testing results:**
+- `aks-wi1-managed` (block): `OUTBOUND_TYPE_BLOCK` INFO, no false positives
+- `aks-wi1-byo` (none): `OUTBOUND_TYPE_NONE` INFO, no false positives
+- Both clusters with bootstrap ACR: no `BOOTSTRAP_ACR_MISSING` finding (correct)
 
 ---
 
-### WI-2: HTTP Proxy Configuration Awareness
+### WI-2: HTTP Proxy Configuration Awareness — ✅ IMPLEMENTED
 
-**Goal:** Detect `httpProxyConfig` in cluster properties, adjust NSG analysis context, and report the proxy egress path.
+**Status:** Implemented (`bd89d64`). Not live-tested (no test cluster with HTTP proxy configured).
 
-**Files to modify:**
-- `outbound_analyzer.py` -- read and report proxy config
-- `nsg_analyzer.py` -- adjust outbound rule analysis when proxy is present
-- `models.py` -- new FindingCode value
+**Goal:** Detect `httpProxyConfig` in cluster properties and report the proxy egress path.
 
-**Implementation:**
+**Files modified:**
+- `outbound_analyzer.py` -- `_check_http_proxy_config()` method
+- `models.py` -- `HTTP_PROXY_CONFIGURED`
 
-1. **Read httpProxyConfig** (`outbound_analyzer.py`, `analyze()` after line 131):
-   ```python
-   http_proxy_config = self.cluster_info.get("http_proxy_config", {})
-   ```
+**What was implemented:**
+1. `_check_http_proxy_config()` reads `cluster_info["http_proxy_config"]`
+2. Extracts `httpProxy`, `httpsProxy`, `noProxy` list, `trustedCa` presence
+3. Emits INFO finding `HTTP_PROXY_CONFIGURED` with proxy URLs and noProxy count
+4. Proxy URLs included in finding details for diagnostic visibility
 
-2. **New method: `_analyze_http_proxy_config()`**:
-   - Extract `httpProxy`, `httpsProxy`, `noProxy`, `trustedCa` presence
-   - Report proxy URLs in diagnostic output (mask credentials if present)
-   - Add INFO finding: "Cluster uses HTTP proxy for outbound traffic"
-   - Store proxy state in analysis result for downstream consumption
-
-3. **NSG analysis adjustment** (`nsg_analyzer.py`):
-   - When proxy is configured, add context note to outbound NSG findings
-   - Do not suppress findings (proxy traffic still traverses NSGs to reach the proxy IP)
-   - Add note: "This cluster uses an HTTP proxy. Outbound traffic routes through the proxy server rather than directly to destination IPs"
-
-4. **Connectivity test context** (`connectivity_tester.py`):
-   - Add proxy context to connectivity test output when `httpProxyConfig` is present
-   - Existing `curl` commands may already use proxy via environment variables
-
-5. **New FindingCode** (`models.py`):
-   - `HTTP_PROXY_CONFIGURED` -- informational, cluster uses HTTP proxy
-
-**Testing:**
-- Unit test with `httpProxyConfig` present, verify INFO finding is generated
-- Verify NSG findings include proxy context note
-- Test with empty/null httpProxyConfig, verify no change in behavior
+**Deferred:** NSG analysis proxy context notes and connectivity test proxy context were planned but not implemented. Proxy traffic still traverses NSGs normally, so no analysis changes are needed. Connectivity test `curl` commands inherit proxy environment variables from the node if configured.
 
 ---
 
@@ -184,40 +161,31 @@ This release closes the high-priority gaps identified in the functionality and g
 
 ---
 
-### WI-5: `defaultOutboundAccess` Retirement Awareness
+### WI-5: `defaultOutboundAccess` Retirement Awareness — ✅ IMPLEMENTED
+
+**Status:** Implemented (`795efbd`), bug-fixed (`14c4ed4`), CLI output suppressed (`11a2f65`). Live-tested on both managed VNet (block) and BYO VNet (none) clusters.
 
 **Goal:** Detect subnet `defaultOutboundAccess` setting and report private subnet status for visibility.
 
-**Files to modify:**
-- `cluster_data_collector.py` -- read subnet property
-- `outbound_analyzer.py` -- cross-reference with outbound type
-- `models.py` -- new FindingCode value
+**Files modified:**
+- `cluster_data_collector.py` -- `default_outbound_access` read via `getattr(subnet, 'default_outbound_access', None)`
+- `outbound_analyzer.py` -- `_check_default_outbound_access()`, accepts `vnets_info` parameter
+- `orchestrator.py` -- passes `vnets_info` to outbound analyzer, collects outbound findings
+- `models.py` -- `DEFAULT_OUTBOUND_ACCESS_DISABLED`
+- `report_generator.py` -- suppress from CLI output (both summary and detailed)
 
-**Implementation:**
+**What was implemented:**
+1. Subnet property read in `collect_vnet_info()` — stores `default_outbound_access` per subnet
+2. `_check_default_outbound_access()` emits per-subnet INFO findings when `False`
+3. No WARNING for missing outbound mechanisms (intentional design)
+4. CLI output suppression: `DEFAULT_OUTBOUND_ACCESS_DISABLED` hidden from console (both summary and `--details`) as it adds noise without actionable value. Preserved in JSON output for programmatic consumers.
 
-1. **Read subnet property** (`cluster_data_collector.py`, in VNet/subnet collection):
-   - When collecting subnet details, extract `default_outbound_access` property
-   - Store in subnet info dict: `"default_outbound_access": subnet.default_outbound_access`
-   - Note: older subnets may not have this property set (defaults to `True` for pre-retirement)
+**Bugs fixed:**
+- `14c4ed4`: `vnets_info` was not passed to outbound analyzer; outbound findings were not collected in orchestrator
 
-2. **Outbound analysis cross-reference** (`outbound_analyzer.py`, new `_check_default_outbound_access()`):
-   - If any cluster subnet has `defaultOutboundAccess == False`:
-     - Emit INFO finding with subnet name and VNet name
-     - Note that this is expected for clusters created after March 31, 2026, or BYO VNets with private subnets
-   - No WARNING is emitted for missing outbound mechanisms. Outbound types `none` and `block` are intentional
-     configurations where the user explicitly wants no internet outbound. The bootstrap ACR checks in the
-     `none`/`block` handlers (WI-1) already provide actionable guidance when relevant.
-
-3. **Informational output**:
-   - In detailed output (`--details`), report `defaultOutboundAccess` status per subnet
-   - Useful for visibility into the new default behavior
-
-4. **New FindingCode** (`models.py`):
-   - `DEFAULT_OUTBOUND_ACCESS_DISABLED` -- informational, subnet has private configuration
-
-**Testing:**
-- Unit test with `defaultOutboundAccess: false` subnet + loadBalancer outbound, verify INFO finding (no warning)
-- Unit test with `defaultOutboundAccess: false` + outbound type `none`, verify INFO finding only (no false warning)
+**Live testing results:**
+- Managed VNet (block): 3 subnets with `defaultOutboundAccess: false` — correct INFO findings in JSON, clean CLI
+- BYO VNet (none): 1 subnet with `defaultOutboundAccess: false` — correct INFO finding in JSON, clean CLI
 
 ---
 
@@ -245,23 +213,67 @@ Each work item should be a separate commit for clean review.
 
 ---
 
+## Enhancements Beyond Original Plan
+
+During implementation and live testing, several additional changes were identified and implemented:
+
+### Enhancement: Probe Tests for Network Isolated Clusters (`6262ae2`)
+
+For `none`/`block` clusters with a bootstrap ACR, the standard MCR DNS + internet connectivity probes are not meaningful (MCR may or may not work depending on user setup). Replaced with bootstrap ACR-specific probes:
+- **Bootstrap ACR DNS Resolution**: `nslookup <acr>.azurecr.io` with `check_private_ip: True` to verify private endpoint resolution
+- **Bootstrap ACR Connectivity**: `curl -v --insecure https://<acr>.azurecr.io/v2/` to verify HTTPS reachability
+- Both marked `critical: True` (failures are actionable — error 211 is the #1 troubleshooting issue)
+- ACR FQDN extracted from `bootstrapProfile.containerRegistryId`
+- API server tests unchanged for all cluster types
+- Tested on both managed VNet (block, 4/4 passed) and BYO VNet (none, 4/4 passed)
+
+### Enhancement: NSG Analyzer for Network Isolation (`6a7e416`)
+
+Adapted NSG compliance checks to avoid false positives on network isolated clusters:
+- **Required rules**: For `none`/`block`, removed MCR and AzureCloud from required outbound rules. Only DNS (UDP 53) and NTP (UDP 123) remain required.
+- **Blocking rule detection for `block`**: Skip outbound blocking analysis entirely (AKS inserts deny rules intentionally)
+- **Blocking rule detection for `none`**: Only flag DNS blocking, not TCP 443 to MCR/AzureCloud
+- **Private cluster API server rule**: Also skip for network isolated clusters (not just traditional private clusters)
+
+### Enhancement: Bootstrap ACR Private DNS VNet Link Check (`f27f056`)
+
+New CRITICAL check: verify that `privatelink.azurecr.io` DNS zone has a VNet link to the cluster's node VNet. Without this, ACR DNS resolution silently returns the public IP instead of the private endpoint IP.
+- Handles BYO ACR (any RG/subscription) and AKS-managed ACR
+- Targeted RG lookup (ACR RG, MC_ RG, cluster RG) with subscription-wide fallback
+- Cross-subscription ACR support via dynamic `PrivateDnsManagementClient`
+- For managed VNet clusters, discovers VNet from MC_ resource group
+- New FindingCode: `BOOTSTRAP_ACR_DNS_NOT_LINKED`
+- Negative-tested by removing VNet link → CRITICAL finding detected; restored → clean run
+
+### Enhancement: Suppress Noisy CLI Findings (`11a2f65`)
+
+`DEFAULT_OUTBOUND_ACCESS_DISABLED` per-subnet INFO findings add noise without actionable value in CLI output. Suppressed from both summary and `--details` modes. Preserved in JSON for programmatic consumers. When all visible findings are suppressed, shows "No issues detected" instead of empty findings section.
+
+---
+
 ## Shared Changes
 
-### models.py -- New FindingCode Values
+### models.py -- FindingCode Values
 
-All work items add FindingCode values. These should be added in a single batch or per-WI:
+Implemented (added per-WI):
 
 ```
-OUTBOUND_TYPE_NONE
-OUTBOUND_TYPE_BLOCK
-OUTBOUND_TYPE_UNSUPPORTED
-BOOTSTRAP_ACR_MISSING
-HTTP_PROXY_CONFIGURED
-SERVICE_TAG_IN_AUTH_RANGES
-SERVICE_TAG_VNET_INTEGRATION_CONFLICT
-NAP_ENABLED
-NAP_SUBNET_NOT_ANALYZED
-DEFAULT_OUTBOUND_ACCESS_DISABLED
+OUTBOUND_TYPE_NONE              (WI-1)
+OUTBOUND_TYPE_BLOCK             (WI-1)
+OUTBOUND_TYPE_UNSUPPORTED       (WI-1)
+BOOTSTRAP_ACR_MISSING           (WI-1)
+HTTP_PROXY_CONFIGURED           (WI-2)
+DEFAULT_OUTBOUND_ACCESS_DISABLED (WI-5)
+BOOTSTRAP_ACR_DNS_NOT_LINKED    (Enhancement)
+```
+
+Remaining (for WI-3 and WI-4):
+
+```
+SERVICE_TAG_IN_AUTH_RANGES       (WI-3)
+SERVICE_TAG_VNET_INTEGRATION_CONFLICT (WI-3)
+NAP_ENABLED                      (WI-4)
+NAP_SUBNET_NOT_ANALYZED          (WI-4)
 ```
 
 ### Version Bump
@@ -291,10 +303,16 @@ These gaps are deferred to future releases:
 
 ## Validation Checklist
 
-- [ ] `az aks net-diagnostics --help` loads successfully
-- [ ] `azdev linter aks-net-diagnostics` passes with 0 violations
+- [x] `az aks net-diagnostics --help` loads successfully
+- [x] `azdev linter aks-net-diagnostics` passes with 0 violations (verified at each commit)
 - [ ] `azdev style aks-net-diagnostics` passes
 - [ ] Unit tests pass for all new FindingCode paths
-- [ ] Existing functionality unchanged (regression test)
+- [x] Existing functionality unchanged (verified via live testing against standard clusters)
 - [ ] Version bumped to 0.3.0b1
 - [ ] HISTORY.rst updated with changelog
+- [x] Live-tested: managed VNet + AKS-managed ACR (outbound block)
+- [x] Live-tested: BYO VNet + BYO ACR (outbound none)
+- [x] Live-tested: probe tests 4/4 passed on both cluster types
+- [x] Live-tested: negative test for missing ACR DNS VNet link → CRITICAL detected
+- [ ] Push commits to remote
+- [ ] Delete test resource group `aks-wi1-test-rg`
