@@ -32,6 +32,7 @@ class OutboundConnectivityAnalyzer:
         clients: Dict[str, Any],
         route_table_analysis: Optional[Dict[str, Any]] = None,
         vmss_info: Optional[List[Dict[str, Any]]] = None,
+        vnets_info: Optional[List[Dict[str, Any]]] = None,
         logger: Optional[logging.Logger] = None,
     ):
         """
@@ -46,6 +47,7 @@ class OutboundConnectivityAnalyzer:
                 - credential: Azure credentials
             route_table_analysis: Pre-computed route table analysis results (optional)
             vmss_info: VMSS configuration data from cluster (optional)
+            vnets_info: VNet analysis data including subnet details (optional)
             logger: Optional logger instance
         """
         self.cluster_info = cluster_info
@@ -55,6 +57,7 @@ class OutboundConnectivityAnalyzer:
         self.credential = clients["credential"]
         self.route_table_analysis = route_table_analysis or {}
         self.vmss_info = vmss_info or []
+        self.vnets_info = vnets_info or []
         self.logger = logger or logging.getLogger(__name__)
 
         # Results storage
@@ -390,7 +393,7 @@ class OutboundConnectivityAnalyzer:
         Since March 31, 2026, new AKS-managed VNet subnets default to
         defaultOutboundAccess=false (private subnets).
         """
-        vnets = self.cluster_info.get("vnets", [])
+        vnets = self.vnets_info
         for vnet in vnets:
             for subnet in vnet.get("subnets", []):
                 default_outbound = subnet.get("default_outbound_access")

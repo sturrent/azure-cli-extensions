@@ -421,6 +421,7 @@ def run_diagnostics(  # pylint: disable=too-many-locals
         clients=clients,
         route_table_analysis=route_table_analysis,
         vmss_info=vmss_analysis,
+        vnets_info=vnets_analysis,
         logger=logger
     )
     outbound_analysis = outbound_analyzer.analyze(show_details=details)
@@ -533,6 +534,13 @@ def run_diagnostics(  # pylint: disable=too-many-locals
                              if not f.code.value.startswith('PERMISSION_INSUFFICIENT')]
         if non_perm_findings:
             logger.debug("Collecting %d non-permission findings from NSG analyzer", len(non_perm_findings))
+            findings.extend(non_perm_findings)
+
+    if hasattr(outbound_analyzer, 'findings') and outbound_analyzer.findings:
+        non_perm_findings = [f.to_dict() for f in outbound_analyzer.findings
+                             if not f.code.value.startswith('PERMISSION_INSUFFICIENT')]
+        if non_perm_findings:
+            logger.debug("Collecting %d non-permission findings from outbound analyzer", len(non_perm_findings))
             findings.extend(non_perm_findings)
 
     # Phase 10: Generate report
