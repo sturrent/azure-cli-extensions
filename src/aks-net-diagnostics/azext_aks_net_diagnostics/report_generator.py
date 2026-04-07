@@ -1274,14 +1274,21 @@ class ReportGenerator:  # pylint: disable=too-many-instance-attributes
             print("## Findings")
             print()
 
-            # Separate permission findings from regular findings
+            # Separate permission findings and noise from regular findings
+            # DEFAULT_OUTBOUND_ACCESS_DISABLED is informational noise in console
+            # (subnet-level detail already covered by outbound type finding);
+            # it remains in the JSON output for programmatic consumers.
+            _suppress_console = {
+                "DEFAULT_OUTBOUND_ACCESS_DISABLED",
+            }
             permission_findings = [
                 f for f in self.findings
                 if f.get("code", "").startswith("PERMISSION_INSUFFICIENT")
             ]
             regular_findings = [
                 f for f in self.findings
-                if not f.get("code", "").startswith("PERMISSION_INSUFFICIENT")
+                if (not f.get("code", "").startswith("PERMISSION_INSUFFICIENT")
+                    and f.get("code", "") not in _suppress_console)
             ]
 
             # Count regular findings by severity
@@ -1303,6 +1310,11 @@ class ReportGenerator:  # pylint: disable=too-many-instance-attributes
             ])
 
             # Display findings summary
+            if not regular_findings and not permission_findings:
+                print("[OK] No issues detected in the network configuration!")
+                print()
+                return
+
             print("**Findings Summary:**")
             if critical_count > 0:
                 print(f"- [CRITICAL] {critical_count}")
