@@ -254,11 +254,15 @@ class ClusterDataCollector:
                             addr_prefixes = (subnet.address_prefixes
                                              if hasattr(subnet, 'address_prefixes')
                                              else None)
+                            default_outbound = getattr(
+                                subnet, 'default_outbound_access', None
+                            )
                             vnets_map[vnet_name]["subnets"].append({
                                 "id": subnet.id,
                                 "name": subnet.name,
                                 "address_prefix": subnet.address_prefix,
                                 "address_prefixes": addr_prefixes,
+                                "default_outbound_access": default_outbound,
                             })
 
                     # Get VNet peerings
