@@ -156,6 +156,9 @@ class OutboundConnectivityAnalyzer:
         # Check subnet defaultOutboundAccess settings
         self._check_default_outbound_access(outbound_type)
 
+        # Check HTTP proxy configuration
+        http_proxy_config = self._check_http_proxy_config()
+
         # Use pre-computed route table analysis from Phase 3
         # (no need to re-analyze - it's already been done)
         udr_analysis = self.route_table_analysis
@@ -170,6 +173,7 @@ class OutboundConnectivityAnalyzer:
             "configured_public_ips": self.outbound_ips.copy(),
             "effective_outbound": effective_outbound_summary,
             "udr_analysis": udr_analysis if udr_analysis.get("route_tables") else None,
+            "http_proxy_config": http_proxy_config,
         }
 
         # Display summary of effective outbound configuration
@@ -331,6 +335,52 @@ class OutboundConnectivityAnalyzer:
                 )
 
         return effective_summary
+
+    def _check_http_proxy_config(self) -> Optional[Dict[str, Any]]:
+        """
+        Check for HTTP proxy configuration on the cluster.
+
+        Returns:
+            Dictionary with proxy config summary if configured, None otherwise
+        """
+        http_proxy_config = self.cluster_info.get("http_proxy_config")
+        if not http_proxy_config:
+            return None
+
+        http_proxy = http_proxy_config.get("http_proxy", "")
+        https_proxy = http_proxy_config.get("https_proxy", "")
+        no_proxy = http_proxy_config.get("no_proxy", [])
+        has_trusted_ca = bool(http_proxy_config.get("trusted_ca"))
+
+        # Mask credentials in proxy URLs for display
+        proxy_display = https_proxy or http_proxy or "configured"
+
+        self.findings.append(
+            Finding.create_info(
+                FindingCode.HTTP_PROXY_CONFIGURED,
+                f"Cluster uses HTTP proxy for outbound traffic: "
+                f"{proxy_display}. Node and pod traffic is routed "
+                f"through the proxy rather than directly to "
+                f"destination IPs.",
+                "NSG outbound rules must allow traffic to the proxy "
+                "server IP. Direct outbound rules to MCR/Azure "
+                "services may not be required if the proxy handles "
+                "those destinations. Connectivity test results may "
+                "succeed transparently through the proxy.",
+                http_proxy=http_proxy or "not set",
+                https_proxy=https_proxy or "not set",
+                no_proxy_count=len(no_proxy) if no_proxy else 0,
+                trusted_ca="configured" if has_trusted_ca else "not set",
+            )
+        )
+
+        return {
+            "enabled": True,
+            "http_proxy": http_proxy or None,
+            "https_proxy": https_proxy or None,
+            "no_proxy_count": len(no_proxy) if no_proxy else 0,
+            "trusted_ca": has_trusted_ca,
+        }
 
     def _check_default_outbound_access(self, outbound_type: str) -> None:
         """
