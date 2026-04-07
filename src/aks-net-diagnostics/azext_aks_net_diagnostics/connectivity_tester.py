@@ -274,29 +274,75 @@ class ConnectivityTester:
         api_server_profile = self.cluster_info.get("api_server_access_profile") or {}
         is_private = api_server_profile.get("enable_private_cluster", False)
 
-        # Define connectivity tests in order:
-        # 1. MCR DNS first (internet connectivity prerequisite)
-        # 2. MCR HTTPS (if MCR DNS succeeds)
-        # 3. API Server DNS (cluster-specific prerequisite)
-        # 4. API Server HTTPS (if API Server DNS succeeds)
-        tests = [
-            {
-                "name": "MCR DNS Resolution",
-                "description": "Resolve MCR (Microsoft Container Registry) FQDN to IP address",
-                "command": "nslookup mcr.microsoft.com",
-                "expected_keywords": ["mcr.microsoft.com"],
-                "check_private_ip": False,
-                "critical": False,
-                "skip_group": None,  # No dependencies
-            },
-            {
-                "name": "Internet Connectivity",
-                "description": "Test outbound internet connectivity to MCR (Microsoft Container Registry)",
-                "command": "curl -v --max-time 60 --insecure --proxy-insecure https://mcr.microsoft.com/v2/",
-                "expected_keywords": ["200", "401", "unauthorized"],
-                "critical": False,
-                "skip_group": "MCR DNS Resolution",  # Depends on MCR DNS
-            },
+        # Determine outbound type and bootstrap ACR for network isolated clusters
+        outbound_type = (
+            self.cluster_info.get("network_profile", {}).get("outbound_type", "")
+            if isinstance(self.cluster_info.get("network_profile"), dict)
+            else ""
+        ).lower()
+        bootstrap_acr_fqdn = self._get_bootstrap_acr_fqdn()
+        is_network_isolated = outbound_type in ("none", "block") and bootstrap_acr_fqdn
+
+        # Build connectivity tests based on cluster type
+        if is_network_isolated:
+            # Network isolated clusters: test bootstrap ACR instead of MCR
+            self.logger.info(
+                "  Network isolated cluster (outbound: %s). "
+                "Testing bootstrap ACR connectivity instead of MCR.",
+                outbound_type,
+            )
+            registry_tests = [
+                {
+                    "name": "Bootstrap ACR DNS Resolution",
+                    "description": (
+                        f"Resolve bootstrap ACR FQDN ({bootstrap_acr_fqdn}) "
+                        f"to IP address via private endpoint"
+                    ),
+                    "command": f"nslookup {bootstrap_acr_fqdn}",
+                    "expected_keywords": [bootstrap_acr_fqdn],
+                    "check_private_ip": True,
+                    "critical": True,
+                    "skip_group": None,
+                },
+                {
+                    "name": "Bootstrap ACR Connectivity",
+                    "description": (
+                        f"Test HTTPS connectivity to bootstrap ACR "
+                        f"({bootstrap_acr_fqdn}) via private endpoint"
+                    ),
+                    "command": (
+                        f"curl -v --max-time 60 --insecure "
+                        f"https://{bootstrap_acr_fqdn}/v2/"
+                    ),
+                    "expected_keywords": ["200", "401", "unauthorized", "HTTP/"],
+                    "critical": True,
+                    "skip_group": "Bootstrap ACR DNS Resolution",
+                },
+            ]
+        else:
+            # Standard clusters: test MCR (internet connectivity)
+            registry_tests = [
+                {
+                    "name": "MCR DNS Resolution",
+                    "description": "Resolve MCR (Microsoft Container Registry) FQDN to IP address",
+                    "command": "nslookup mcr.microsoft.com",
+                    "expected_keywords": ["mcr.microsoft.com"],
+                    "check_private_ip": False,
+                    "critical": False,
+                    "skip_group": None,
+                },
+                {
+                    "name": "Internet Connectivity",
+                    "description": "Test outbound internet connectivity to MCR (Microsoft Container Registry)",
+                    "command": "curl -v --max-time 60 --insecure --proxy-insecure https://mcr.microsoft.com/v2/",
+                    "expected_keywords": ["200", "401", "unauthorized"],
+                    "critical": False,
+                    "skip_group": "MCR DNS Resolution",
+                },
+            ]
+
+        # API server tests (always included)
+        api_tests = [
             {
                 "name": "API Server DNS Resolution",
                 "description": "Resolve API server FQDN to IP address",
@@ -304,17 +350,19 @@ class ConnectivityTester:
                 "expected_keywords": [api_server_fqdn],
                 "check_private_ip": is_private,
                 "critical": True,
-                "skip_group": None,  # No dependencies
+                "skip_group": None,
             },
             {
                 "name": "API Server HTTPS Connectivity",
                 "description": "Test HTTPS connection to API server",
                 "command": f"curl -v -k --max-time 15 https://{api_server_fqdn}:443",
-                "expected_keywords": ["200", "401", "403", "HTTP/"],  # Any HTTP response indicates connectivity
+                "expected_keywords": ["200", "401", "403", "HTTP/"],
                 "critical": True,
-                "skip_group": "API Server DNS Resolution",  # Depends on API Server DNS
+                "skip_group": "API Server DNS Resolution",
             },
         ]
+
+        tests = registry_tests + api_tests
 
         # Execute each test with dependency tracking
         failed_tests = set()  # Track which tests have failed to determine skip logic
@@ -412,6 +460,25 @@ class ConnectivityTester:
             if match:
                 return match.group(1)
 
+        return None
+
+    def _get_bootstrap_acr_fqdn(self) -> Optional[str]:
+        """Extract bootstrap ACR FQDN from cluster bootstrap profile.
+
+        The bootstrap profile contains a container registry resource ID like:
+          .../Microsoft.ContainerRegistry/registries/<acrName>
+        The FQDN is <acrName>.azurecr.io
+        """
+        bootstrap_profile = self.cluster_info.get("bootstrap_profile") or {}
+        registry_id = bootstrap_profile.get("container_registry_id")
+        if not registry_id:
+            return None
+
+        # Extract ACR name from resource ID (last segment)
+        parts = registry_id.rstrip("/").split("/")
+        if parts:
+            acr_name = parts[-1]
+            return f"{acr_name}.azurecr.io"
         return None
 
     def _execute_node_test(self, node_instance, test: Dict[str, Any]) -> Dict[str, Any]:
