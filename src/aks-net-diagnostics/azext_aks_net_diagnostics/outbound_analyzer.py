@@ -138,6 +138,20 @@ class OutboundConnectivityAnalyzer:
             self._analyze_udr_outbound()
         elif outbound_type in ("managedNATGateway", "userAssignedNATGateway"):
             self._analyze_nat_gateway_outbound(show_details, outbound_type)
+        elif outbound_type == "none":
+            self._analyze_none_outbound()
+        elif outbound_type == "block":
+            self._analyze_block_outbound()
+        else:
+            self.findings.append(
+                Finding.create_info(
+                    FindingCode.OUTBOUND_TYPE_UNSUPPORTED,
+                    f"Unrecognized outbound type: '{outbound_type}'",
+                    "This outbound type is not yet supported by the "
+                    "diagnostics extension. Analysis may be incomplete.",
+                    outbound_type=outbound_type,
+                )
+            )
 
         # Check subnet defaultOutboundAccess settings
         self._check_default_outbound_access(outbound_type)
@@ -304,6 +318,17 @@ class OutboundConnectivityAnalyzer:
                     effective_summary["description"] = (
                         "Managed NAT Gateway (no outbound IPs detected)"
                     )
+            elif outbound_type == "none":
+                effective_summary["description"] = (
+                    "Outbound type 'none': no AKS-managed egress. "
+                    "User manages outbound connectivity or cluster "
+                    "operates without internet access"
+                )
+            elif outbound_type == "block":
+                effective_summary["description"] = (
+                    "Outbound type 'block': AKS actively blocks all "
+                    "egress traffic from the cluster"
+                )
 
         return effective_summary
 
@@ -532,6 +557,92 @@ class OutboundConnectivityAnalyzer:
         elif outbound_type == "userAssignedNATGateway":
             # User-assigned NAT Gateway - check subnets for attached NAT Gateway
             self._analyze_user_assigned_nat_gateway(show_details)
+
+    def _analyze_none_outbound(self) -> None:
+        """
+        Handle outbound type 'none' -- network isolated clusters where
+        AKS does not provision any egress path. The user is responsible
+        for outbound connectivity (or the cluster runs without internet).
+        """
+        self.logger.info("  - Outbound type: none (no AKS-managed egress)")
+
+        bootstrap_profile = self.cluster_info.get("bootstrap_profile", {})
+        bootstrap_acr = (
+            bootstrap_profile.get("container_registry_id")
+            if bootstrap_profile
+            else None
+        )
+
+        self.findings.append(
+            Finding.create_info(
+                FindingCode.OUTBOUND_TYPE_NONE,
+                "Cluster uses outbound type 'none'. AKS does not provision "
+                "any egress path. Outbound connectivity is user-managed or "
+                "the cluster operates without internet access.",
+                "Verify that required outbound paths (if any) are configured "
+                "through UDRs, NAT Gateway, or HTTP proxy outside of AKS. "
+                "For network isolated clusters, ensure the bootstrap ACR "
+                "and its private endpoint are properly configured.",
+                bootstrap_acr=bootstrap_acr or "not configured",
+            )
+        )
+
+        if not bootstrap_acr:
+            self.findings.append(
+                Finding.create_warning(
+                    FindingCode.BOOTSTRAP_ACR_MISSING,
+                    "Outbound type is 'none' but no bootstrap ACR is "
+                    "configured (bootstrapProfile.containerRegistryId). "
+                    "Network isolated clusters require a private ACR "
+                    "for image pulls.",
+                    "If this is a network isolated cluster, configure a "
+                    "bootstrap ACR with '--bootstrap-artifact-source Cache "
+                    "--bootstrap-container-registry-resource-id <ACR_ID>'. "
+                    "If outbound connectivity is provided via UDR or proxy, "
+                    "this warning can be ignored.",
+                )
+            )
+
+    def _analyze_block_outbound(self) -> None:
+        """
+        Handle outbound type 'block' (preview) -- AKS actively blocks
+        all egress traffic from the cluster.
+        """
+        self.logger.info("  - Outbound type: block (all egress blocked by AKS)")
+
+        bootstrap_profile = self.cluster_info.get("bootstrap_profile", {})
+        bootstrap_acr = (
+            bootstrap_profile.get("container_registry_id")
+            if bootstrap_profile
+            else None
+        )
+
+        self.findings.append(
+            Finding.create_info(
+                FindingCode.OUTBOUND_TYPE_BLOCK,
+                "Cluster uses outbound type 'block' (preview). AKS actively "
+                "blocks all egress traffic. This requires a bootstrap ACR "
+                "with private endpoint for image pulls.",
+                "Ensure the bootstrap ACR and its private endpoint are "
+                "properly configured. All required images must be cached "
+                "in the bootstrap ACR.",
+                bootstrap_acr=bootstrap_acr or "not configured",
+            )
+        )
+
+        if not bootstrap_acr:
+            self.findings.append(
+                Finding.create_critical(
+                    FindingCode.BOOTSTRAP_ACR_MISSING,
+                    "Outbound type is 'block' but no bootstrap ACR is "
+                    "configured (bootstrapProfile.containerRegistryId). "
+                    "Clusters with outbound type 'block' cannot pull images "
+                    "from public registries.",
+                    "Configure a bootstrap ACR with "
+                    "'--bootstrap-artifact-source Cache "
+                    "--bootstrap-container-registry-resource-id <ACR_ID>'.",
+                )
+            )
 
     def _analyze_managed_nat_gateway(self, show_details: bool = False) -> None:
         """
