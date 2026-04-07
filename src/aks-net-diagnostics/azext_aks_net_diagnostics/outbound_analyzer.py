@@ -387,8 +387,8 @@ class OutboundConnectivityAnalyzer:
 
     def _check_default_outbound_access(self, outbound_type: str) -> None:
         """
-        Check subnet defaultOutboundAccess settings and warn about
-        potential outbound connectivity issues.
+        Check subnet defaultOutboundAccess settings and report
+        private subnet status.
 
         Since March 31, 2026, new AKS-managed VNet subnets default to
         defaultOutboundAccess=false (private subnets).
@@ -399,44 +399,19 @@ class OutboundConnectivityAnalyzer:
                 default_outbound = subnet.get("default_outbound_access")
                 if default_outbound is False:
                     subnet_name = subnet.get("name", "unknown")
-                    # Informational: subnet is private
                     self.findings.append(
                         Finding.create_info(
                             FindingCode.DEFAULT_OUTBOUND_ACCESS_DISABLED,
                             f"Subnet '{subnet_name}' has defaultOutboundAccess "
                             f"disabled (private subnet)",
                             "This is expected for clusters created after March 31, "
-                            "2026, or for BYO VNets with private subnets. Ensure "
-                            "an explicit outbound mechanism (Load Balancer, NAT "
-                            "Gateway, UDR, or HTTP proxy) is configured.",
+                            "2026, or for BYO VNets with private subnets. The "
+                            "cluster's configured outbound type determines how "
+                            "outbound connectivity is provided.",
                             subnet_name=subnet_name,
                             vnet_name=vnet.get("name", "unknown"),
                         )
                     )
-
-                    # Warning if no explicit outbound mechanism
-                    has_explicit_outbound = outbound_type in (
-                        "loadBalancer",
-                        "managedNATGateway",
-                        "userAssignedNATGateway",
-                        "userDefinedRouting",
-                    )
-                    if not has_explicit_outbound:
-                        self.findings.append(
-                            Finding.create_warning(
-                                FindingCode.NO_EXPLICIT_OUTBOUND_MECHANISM,
-                                f"Subnet '{subnet_name}' has defaultOutboundAccess "
-                                f"disabled but outbound type is '{outbound_type}' "
-                                f"with no explicit outbound mechanism",
-                                "Configure an explicit outbound method such as a "
-                                "NAT Gateway, Load Balancer with outbound rules, "
-                                "UDR to a virtual appliance, or HTTP proxy. "
-                                "Without one, the cluster has no outbound "
-                                "internet connectivity.",
-                                subnet_name=subnet_name,
-                                outbound_type=outbound_type,
-                            )
-                        )
 
     def _display_outbound_summary(self, effective_summary: Dict[str, Any]) -> None:
         """
