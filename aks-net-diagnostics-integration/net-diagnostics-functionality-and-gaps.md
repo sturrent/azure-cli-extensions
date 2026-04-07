@@ -71,39 +71,36 @@ Cilium-specific features such as eBPF network policies, FQDN filtering, L7 polic
 | `managedNATGateway` | Supported | NAT Gateway detection in node resource group, public IP and prefix extraction |
 | `userAssignedNATGateway` | Supported | Subnet attachment checks, BYO NAT Gateway, user-managed IP detection |
 | `userDefinedRouting` | Supported | Route table analysis, virtual appliance detection, UDR impact classification |
-| `none` | Gap | Not handled. Extension does not recognize this outbound type or adapt its analysis accordingly |
-| `block` (preview) | Gap | Not handled. Extension does not recognize this outbound type |
-| HTTP proxy (`httpProxyConfig`) | Gap | Not detected. Extension does not check for proxy configuration or adjust analysis accordingly |
+| `none` | Supported | Recognized as intentional no-egress configuration; bootstrap ACR validation; suppresses false outbound warnings |
+| `block` (preview) | Supported | Recognized as AKS-blocked egress; bootstrap ACR validation; suppresses outbound reachability checks |
+| HTTP proxy (`httpProxyConfig`) | Supported | Detected and reported as INFO finding; proxy config included in outbound analysis result |
 
-### Gap Details: Outbound Type `none` and `block`
+### Outbound Type `none` and `block` (Implemented in v0.3.0b1)
 
 Network isolated clusters use outbound type `none` (GA) or `block` (preview) combined with `--bootstrap-artifact-source Cache` and a private ACR for image pulls.
 
 - **Outbound type `none`**: AKS does not set up any egress paths. The user configures them manually or operates without outbound internet access.
 - **Outbound type `block`**: AKS actively blocks all egress traffic from the cluster.
 
-The extension currently does not:
-- Detect `none` or `block` as valid outbound types
-- Adjust outbound connectivity expectations (MCR reachability, Azure service access)
-- Validate bootstrap ACR configuration (`bootstrapProfile.containerRegistryResourceId`)
-- Check private endpoint connectivity to the bootstrap ACR
+The extension now (v0.3.0b1, WI-1):
+- Recognizes `none` and `block` as valid outbound types with dedicated analysis handlers
+- Reports each as an INFO finding (`OUTBOUND_TYPE_NONE`, `OUTBOUND_TYPE_BLOCK`)
+- Checks for bootstrap ACR configuration (`bootstrapProfile.containerRegistryResourceId`)
+- Emits `BOOTSTRAP_ACR_MISSING` WARNING if bootstrap ACR is absent on `block` clusters
+- Suppresses false outbound connectivity warnings (MCR reachability, Azure service access)
+- Handles unrecognized outbound types with `OUTBOUND_TYPE_UNSUPPORTED` INFO finding
 
-**Impact:** High. Network isolated clusters are increasingly common for security-sensitive environments. The extension may produce false findings about missing outbound connectivity.
-
-### Gap Details: HTTP Proxy Configuration
+### HTTP Proxy Configuration (Implemented in v0.3.0b1)
 
 **Reference:** [HTTP proxy support in AKS](https://learn.microsoft.com/azure/aks/http-proxy)
 
 AKS clusters can be configured with an HTTP proxy for outbound internet access via `httpProxyConfig` (available in the AKS API response under `properties.httpProxyConfig`). When configured, node and pod traffic is routed through the proxy server rather than directly through NSG-allowed paths.
 
-The extension currently does not:
-- Detect `httpProxyConfig` in the cluster properties
-- Account for proxy-routed egress when analyzing NSG rules (may flag missing outbound rules that are unnecessary with a proxy)
-- Adjust outbound connectivity expectations (MCR, Azure services) when a proxy is in use
-- Report the effective egress path through the proxy in diagnostic output
-- Consider `noProxy` entries when evaluating which traffic bypasses the proxy
-
-**Impact:** Medium. Clusters using HTTP proxy may receive false NSG findings about missing outbound rules. Connectivity tests run via RunCommand may succeed transparently through the proxy, but the extension does not explain this in its output.
+The extension now (v0.3.0b1, WI-2):
+- Detects `httpProxyConfig` in cluster properties
+- Reports `HTTP_PROXY_CONFIGURED` INFO finding when proxy is present
+- Includes proxy configuration details in the outbound analysis result
+- Provides context that outbound traffic routes through the proxy server
 
 ### NAT Gateway StandardV2
 
@@ -317,11 +314,11 @@ Starting March 31, 2026, AKS no longer supports default outbound access for VMs.
 
 | Check | Status | Notes |
 |-------|--------|-------|
-| Detection of `defaultOutboundAccess` setting | Gap | Not checked in cluster network profile |
-| Warning for clusters relying on default outbound | Gap | No migration guidance |
-| Private subnet detection | Gap | No awareness of new default behavior |
+| Detection of `defaultOutboundAccess` setting | Supported | Reads subnet property via `getattr(subnet, 'default_outbound_access', None)` |
+| INFO finding for private subnets | Supported | Reports `DEFAULT_OUTBOUND_ACCESS_DISABLED` with subnet and VNet names |
+| Private subnet detection | Supported | Identifies subnets with `defaultOutboundAccess = false` in VNet analysis |
 
-**Impact:** Medium. This change is now active (past the March 31, 2026 deadline). Clusters created after this date automatically have `defaultOutboundAccess = false`. The extension should be aware of this when analyzing outbound connectivity. Existing clusters using BYO VNets are unaffected.
+**Status:** Implemented in v0.3.0b1 (WI-5). The extension reports private subnet status as an INFO finding for visibility. No WARNING is emitted for the absence of an explicit outbound mechanism because outbound types `none` and `block` are intentional configurations. The bootstrap ACR checks in the `none`/`block` handlers provide actionable guidance when relevant.
 
 ### Azure Linux 2.0 Retirement
 
@@ -365,13 +362,13 @@ These gaps affect commonly used or growing AKS features and could produce incorr
 
 | Gap | Feature Category | Impact | Effort Estimate |
 |-----|-----------------|--------|-----------------|
-| Outbound type `none` | Outbound Analysis | Extension may produce false findings for network isolated clusters | Medium |
-| Outbound type `block` (preview) | Outbound Analysis | Extension may produce false findings for network isolated clusters | Medium |
+| ~~Outbound type `none`~~ | ~~Outbound Analysis~~ | ~~Implemented in v0.3.0b1 (WI-1)~~ | ~~Done~~ |
+| ~~Outbound type `block` (preview)~~ | ~~Outbound Analysis~~ | ~~Implemented in v0.3.0b1 (WI-1)~~ | ~~Done~~ |
 | Network isolated cluster validation | Cluster Access | Missing bootstrap ACR, private endpoint, and egress restriction checks | High |
 | Service tags in authorized IP ranges (preview) | API Server Security | Extension may fail to parse or misinterpret service tag entries | Medium |
 | Node Auto-Provisioning (NAP) | Node Infrastructure | Karpenter-provisioned nodes are invisible to current discovery | High |
-| `defaultOutboundAccess` retirement awareness | Platform Changes | No detection or guidance for the new default behavior (now active) | Low |
-| HTTP proxy configuration | Outbound Analysis | May produce false NSG findings; proxy egress path not reported | Medium |
+| ~~`defaultOutboundAccess` retirement awareness~~ | ~~Platform Changes~~ | ~~Implemented in v0.3.0b1 (WI-5)~~ | ~~Done~~ |
+| ~~HTTP proxy configuration~~ | ~~Outbound Analysis~~ | ~~Implemented in v0.3.0b1 (WI-2)~~ | ~~Done~~ |
 
 ### Medium Priority
 

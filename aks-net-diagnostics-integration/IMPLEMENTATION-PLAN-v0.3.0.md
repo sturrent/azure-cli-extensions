@@ -186,7 +186,7 @@ This release closes the high-priority gaps identified in the functionality and g
 
 ### WI-5: `defaultOutboundAccess` Retirement Awareness
 
-**Goal:** Detect subnet `defaultOutboundAccess` setting and warn about the post-March 2026 behavior.
+**Goal:** Detect subnet `defaultOutboundAccess` setting and report private subnet status for visibility.
 
 **Files to modify:**
 - `cluster_data_collector.py` -- read subnet property
@@ -200,11 +200,13 @@ This release closes the high-priority gaps identified in the functionality and g
    - Store in subnet info dict: `"default_outbound_access": subnet.default_outbound_access`
    - Note: older subnets may not have this property set (defaults to `True` for pre-retirement)
 
-2. **Outbound analysis cross-reference** (`outbound_analyzer.py`, in `_determine_effective_outbound()`):
-   - If any cluster subnet has `defaultOutboundAccess == False` and outbound type is `loadBalancer`:
-     - This is expected post-retirement. No warning needed if LB has outbound rules.
-   - If `defaultOutboundAccess == False` and no explicit outbound mechanism:
-     - Emit WARNING: "Subnet has default outbound access disabled. Cluster requires an explicit outbound mechanism."
+2. **Outbound analysis cross-reference** (`outbound_analyzer.py`, new `_check_default_outbound_access()`):
+   - If any cluster subnet has `defaultOutboundAccess == False`:
+     - Emit INFO finding with subnet name and VNet name
+     - Note that this is expected for clusters created after March 31, 2026, or BYO VNets with private subnets
+   - No WARNING is emitted for missing outbound mechanisms. Outbound types `none` and `block` are intentional
+     configurations where the user explicitly wants no internet outbound. The bootstrap ACR checks in the
+     `none`/`block` handlers (WI-1) already provide actionable guidance when relevant.
 
 3. **Informational output**:
    - In detailed output (`--details`), report `defaultOutboundAccess` status per subnet
@@ -212,11 +214,10 @@ This release closes the high-priority gaps identified in the functionality and g
 
 4. **New FindingCode** (`models.py`):
    - `DEFAULT_OUTBOUND_ACCESS_DISABLED` -- informational, subnet has private configuration
-   - `NO_EXPLICIT_OUTBOUND_MECHANISM` -- warning, subnet is private with no outbound path
 
 **Testing:**
-- Unit test with `defaultOutboundAccess: false` subnet + loadBalancer outbound, verify no false warning
-- Unit test with `defaultOutboundAccess: false` + no outbound mechanism, verify WARNING
+- Unit test with `defaultOutboundAccess: false` subnet + loadBalancer outbound, verify INFO finding (no warning)
+- Unit test with `defaultOutboundAccess: false` + outbound type `none`, verify INFO finding only (no false warning)
 
 ---
 
@@ -261,7 +262,6 @@ SERVICE_TAG_VNET_INTEGRATION_CONFLICT
 NAP_ENABLED
 NAP_SUBNET_NOT_ANALYZED
 DEFAULT_OUTBOUND_ACCESS_DISABLED
-NO_EXPLICIT_OUTBOUND_MECHANISM
 ```
 
 ### Version Bump
