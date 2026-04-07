@@ -12,18 +12,20 @@
 |-----------|--------|---------|-------------|
 | WI-5: defaultOutboundAccess | **Done** | `795efbd`, `14c4ed4` | Managed + BYO VNet |
 | WI-1: Outbound none/block | **Done** | `876816c`, `dc30e91` | Managed (block) + BYO (none) |
-| WI-2: HTTP proxy awareness | **Done** | `bd89d64` | Not live-tested (no proxy cluster) |
+| WI-2: HTTP proxy awareness | **Done** | `bd89d64`, `0c225e3` | Proxy cluster (3 breakage scenarios) |
 | WI-3: Service tags | Not started | -- | -- |
 | WI-4: NAP detection | Not started | -- | -- |
 | Enhancement: Probe tests for network isolation | **Done** | `6262ae2` | Managed (block) + BYO (none) |
 | Enhancement: NSG analyzer for network isolation | **Done** | `6a7e416` | Managed (block) + BYO (none) |
 | Enhancement: Bootstrap ACR private DNS VNet link | **Done** | `f27f056` | Managed (block) + BYO (none) |
 | Enhancement: Suppress noisy CLI findings | **Done** | `11a2f65` | Managed (block) + BYO (none) |
+| Enhancement: Proxy diagnostics (VNet, NSG, probes) | **Done** | `0c225e3` | Proxy cluster (3 breakage scenarios) |
 | Doc updates | **Done** | `1c32e53`, `cceca6c` | -- |
 
 **Test clusters used:**
 - `aks-wi1-managed` (managed VNet, AKS-managed ACR, outbound: block) in `aks-wi1-test-rg`
 - `aks-wi1-byo` (BYO VNet `wi1-test-vnet`, BYO ACR `akswi1byoacr`, outbound: none) in `aks-wi1-test-rg`
+- `aks-proxy` (HTTP proxy via VNet peering, outbound: loadBalancer) in `aks-proxy-rg` — AKS VNet `aks-proxy-vnet` (10.100.0.0/16) peered to `proxy-svc-vnet` (172.12.0.0/16) in `proxy-svc-rg`, proxy VM at 172.12.0.4:8080
 
 ---
 
@@ -63,21 +65,58 @@ This release closes the high-priority gaps identified in the functionality and g
 
 ### WI-2: HTTP Proxy Configuration Awareness — ✅ IMPLEMENTED
 
-**Status:** Implemented (`bd89d64`). Not live-tested (no test cluster with HTTP proxy configured).
+**Status:** Implemented (`bd89d64`), enhanced with actionable proxy diagnostics (`0c225e3`). Live-tested on dedicated proxy cluster with three breakage scenarios.
 
-**Goal:** Detect `httpProxyConfig` in cluster properties and report the proxy egress path.
+**Goal:** Detect `httpProxyConfig` in cluster properties, validate proxy reachability, add NSG compliance rules, and run active probe tests through the proxy.
 
 **Files modified:**
-- `outbound_analyzer.py` -- `_check_http_proxy_config()` method
-- `models.py` -- `HTTP_PROXY_CONFIGURED`
+- `outbound_analyzer.py` -- `_check_http_proxy_config()`, `_check_proxy_reachability()`, `_parse_proxy_url()`, `_get_remote_vnet_prefixes()`
+- `nsg_analyzer.py` -- `_get_proxy_required_rule()`, `_blocks_proxy_traffic()`
+- `connectivity_tester.py` -- `_build_proxy_tests()`
+- `models.py` -- `HTTP_PROXY_CONFIGURED`, `PROXY_NOT_REACHABLE`
 
 **What was implemented:**
+
+*Phase 1 — Detection (`bd89d64`):*
 1. `_check_http_proxy_config()` reads `cluster_info["http_proxy_config"]`
 2. Extracts `httpProxy`, `httpsProxy`, `noProxy` list, `trustedCa` presence
 3. Emits INFO finding `HTTP_PROXY_CONFIGURED` with proxy URLs and noProxy count
 4. Proxy URLs included in finding details for diagnostic visibility
 
-**Deferred:** NSG analysis proxy context notes and connectivity test proxy context were planned but not implemented. Proxy traffic still traverses NSGs normally, so no analysis changes are needed. Connectivity test `curl` commands inherit proxy environment variables from the node if configured.
+*Phase 2 — Actionable diagnostics (`0c225e3`):*
+
+5. **Proxy VNet reachability** (`outbound_analyzer.py`):
+   - `_parse_proxy_url()` extracts IP and port from proxy URL (handles `http://`, `https://`, with/without port)
+   - `_check_proxy_reachability()` validates proxy IP is within node VNet address spaces or reachable via VNet peering
+   - `_get_remote_vnet_prefixes()` resolves peered VNet address prefixes from peering resource IDs
+   - Emits `PROXY_NOT_REACHABLE` CRITICAL if proxy IP not within any reachable address space
+   - Return dict includes `proxy_ip` and `proxy_port` for downstream consumers (NSG, probes)
+
+6. **NSG proxy compliance** (`nsg_analyzer.py`):
+   - `_get_proxy_required_rule()` parses proxy URL and returns required outbound rule dict (`AKS_HTTP_Proxy`, TCP, dest=proxy_ip, port=proxy_port)
+   - Added to `_get_required_aks_rules()` after API server rule when `http_proxy_config` is present
+   - `_blocks_proxy_traffic()` detects deny rules targeting proxy IP:port specifically
+   - Integrated into `_blocks_aks_traffic()` for both network-isolated and standard clusters
+
+7. **Proxy probe test** (`connectivity_tester.py`):
+   - `_build_proxy_tests()` builds "HTTP Proxy Connectivity" test when `http_proxy_config` is present
+   - Test uses `curl -v --max-time 15 --proxy-insecure -x {proxy_url} https://mcr.microsoft.com/v2/`
+   - Expected keywords: `["200", "401", "407", "HTTP/"]` (any proxy/server response = reachable)
+   - Marked `critical: True`, runs FIRST in test list (before registry and API tests)
+
+**Live testing results (proxy cluster `aks-proxy` in `aks-proxy-rg`):**
+
+| Scenario | Finding | Probes |
+|----------|---------|--------|
+| Working proxy (peering intact) | 0 critical, 2 INFO | 5/5 passed |
+| NSG deny rule on proxy IP:port | CRITICAL `NSG_BLOCKING_AKS_TRAFFIC` | -- |
+| Broken VNet peering to proxy VNet | CRITICAL `PROXY_NOT_REACHABLE` | 1 FAILED (timeout), 4 passed |
+
+**Test cluster topology:**
+- AKS VNet `aks-proxy-vnet` (10.100.0.0/16) in `aks-proxy-rg`
+- Proxy VNet `proxy-svc-vnet` (172.12.0.0/16) in `proxy-svc-rg`
+- VNet peering: `aks-to-svc` ↔ `svc-to-aks`
+- Squid proxy VM at 172.12.0.4:8080
 
 ---
 
@@ -249,6 +288,21 @@ New CRITICAL check: verify that `privatelink.azurecr.io` DNS zone has a VNet lin
 
 `DEFAULT_OUTBOUND_ACCESS_DISABLED` per-subnet INFO findings add noise without actionable value in CLI output. Suppressed from both summary and `--details` modes. Preserved in JSON for programmatic consumers. When all visible findings are suppressed, shows "No issues detected" instead of empty findings section.
 
+### Enhancement: Actionable Proxy Diagnostics (`0c225e3`)
+
+HTTP proxy detection (WI-2 Phase 1) only reported an INFO finding — not actionable for troubleshooting. Phase 2 adds three enhancements validated via deliberate breakage testing:
+
+1. **Proxy VNet reachability** (`outbound_analyzer.py`): Validates proxy IP is within the node VNet or reachable via VNet peering. Emits `PROXY_NOT_REACHABLE` CRITICAL when proxy is unreachable. Parses proxy URL to extract IP/port, resolves peered VNet prefixes via ARM peering resource IDs.
+
+2. **NSG proxy compliance** (`nsg_analyzer.py`): Adds proxy IP:port as a required outbound rule (`AKS_HTTP_Proxy`). Detects deny rules specifically targeting proxy traffic. Works for both network-isolated and standard clusters.
+
+3. **Proxy connectivity probe** (`connectivity_tester.py`): Adds "HTTP Proxy Connectivity" test that curls MCR through the proxy. Runs FIRST in test list to surface proxy failures before downstream tests. Accepts any HTTP response (200/401/407) as success since it proves network path works.
+
+**Breakage test results:**
+- NSG deny rule `DenyProxyOutbound` (priority 100, TCP, dest 172.12.0.4:8080) → CRITICAL `NSG_BLOCKING_AKS_TRAFFIC` detected immediately
+- VNet peering deletion (`aks-to-svc`) → CRITICAL `PROXY_NOT_REACHABLE` + probe `[FAILED]` with `curl error (28): Connection timed out`
+- Both restored → clean run (0 critical, 5/5 probes passed)
+
 ---
 
 ## Shared Changes
@@ -263,6 +317,7 @@ OUTBOUND_TYPE_BLOCK             (WI-1)
 OUTBOUND_TYPE_UNSUPPORTED       (WI-1)
 BOOTSTRAP_ACR_MISSING           (WI-1)
 HTTP_PROXY_CONFIGURED           (WI-2)
+PROXY_NOT_REACHABLE             (WI-2 / Enhancement)
 DEFAULT_OUTBOUND_ACCESS_DISABLED (WI-5)
 BOOTSTRAP_ACR_DNS_NOT_LINKED    (Enhancement)
 ```
@@ -314,5 +369,6 @@ These gaps are deferred to future releases:
 - [x] Live-tested: BYO VNet + BYO ACR (outbound none)
 - [x] Live-tested: probe tests 4/4 passed on both cluster types
 - [x] Live-tested: negative test for missing ACR DNS VNet link → CRITICAL detected
+- [x] Live-tested: proxy cluster — working, NSG deny, broken peering (3 breakage scenarios)
 - [ ] Push commits to remote
-- [ ] Delete test resource group `aks-wi1-test-rg`
+- [ ] Delete test resource groups (`aks-wi1-test-rg`, `aks-proxy-rg`, `proxy-svc-rg`)
