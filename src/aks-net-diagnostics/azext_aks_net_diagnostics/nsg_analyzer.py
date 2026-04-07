@@ -202,7 +202,49 @@ class NSGAnalyzer(BaseAnalyzer):
                 }
             )
 
+        # When HTTP proxy is configured, nodes must reach the proxy IP
+        proxy_rule = self._get_proxy_required_rule()
+        if proxy_rule:
+            rules["outbound"].append(proxy_rule)
+
         return rules
+
+    def _get_proxy_required_rule(self) -> Optional[Dict[str, str]]:
+        """Build a required outbound rule for the HTTP proxy server, if configured."""
+        http_proxy_config = self.cluster_info.get("http_proxy_config")
+        if not http_proxy_config:
+            return None
+
+        proxy_url = (
+            http_proxy_config.get("https_proxy")
+            or http_proxy_config.get("http_proxy")
+            or ""
+        )
+        if not proxy_url:
+            return None
+
+        # Parse IP and port from proxy URL
+        try:
+            from urllib.parse import urlparse  # pylint: disable=import-outside-toplevel
+            parsed = urlparse(proxy_url)
+            host = parsed.hostname
+            port = parsed.port
+            if not host:
+                return None
+            # Verify it's an IP address
+            import ipaddress  # pylint: disable=import-outside-toplevel
+            ipaddress.ip_address(host)
+        except (ValueError, TypeError):
+            return None
+
+        port_str = str(port) if port else "8080"
+        return {
+            "name": "AKS_HTTP_Proxy",
+            "protocol": "TCP",
+            "destination": host,
+            "ports": [port_str],
+            "description": f"HTTP proxy server ({host}:{port_str})",
+        }
 
     def _analyze_subnet_nsgs(self) -> None:
         """Analyze NSGs associated with node and pod subnets."""
@@ -985,6 +1027,9 @@ class NSGAnalyzer(BaseAnalyzer):
         For network isolated clusters (outbound type 'none'), blocking
         MCR or AzureCloud is not a problem since images come from a
         private bootstrap ACR. Only DNS (UDP 53) blocking is flagged.
+
+        When HTTP proxy is configured, also checks if the rule blocks
+        traffic to the proxy server IP and port.
         """
         outbound_type = self._get_outbound_type()
         is_network_isolated = outbound_type in ("none", "block")
@@ -994,14 +1039,49 @@ class NSGAnalyzer(BaseAnalyzer):
             if dest in ["*", "Internet"]:
                 if ("53" in str(ports) or "*" in str(ports)) and protocol.upper() in ["UDP", "*"]:
                     return True
-            return False
+            # Still check proxy blocking for network isolated clusters
+            return self._blocks_proxy_traffic(dest, ports, protocol)
 
         # Standard clusters: check for MCR/Azure/Internet blocking on TCP 443
         if dest in ["*", "Internet"] or "MicrosoftContainerRegistry" in str(dest) or "AzureCloud" in str(dest):
             # Check ports and protocol
             if ("443" in str(ports) or "*" in str(ports)) and protocol.upper() in ["TCP", "*"]:
                 return True
+
+        # Also check proxy blocking for standard clusters
+        if self._blocks_proxy_traffic(dest, ports, protocol):
+            return True
+
         return False
+
+    def _blocks_proxy_traffic(self, dest: str, ports: str, protocol: str) -> bool:
+        """Check if a deny rule would block traffic to the HTTP proxy server."""
+        proxy_rule = self._get_proxy_required_rule()
+        if not proxy_rule:
+            return False
+
+        proxy_ip = proxy_rule["destination"]
+        proxy_port = proxy_rule["ports"][0]
+
+        # Check if destination matches the proxy IP
+        dest_matches = dest in ["*", "Internet"] or dest == proxy_ip
+
+        if not dest_matches:
+            return False
+
+        # Check if port matches
+        port_matches = (
+            "*" in str(ports)
+            or proxy_port in str(ports)
+        )
+        if not port_matches:
+            return False
+
+        # Check protocol (proxy is TCP)
+        if protocol.upper() not in ["TCP", "*"]:
+            return False
+
+        return True
 
     def _check_rule_precedence(
         self, deny_rule: Dict[str, Any], sorted_rules: List[Dict[str, Any]]

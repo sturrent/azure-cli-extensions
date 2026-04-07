@@ -362,7 +362,11 @@ class ConnectivityTester:
             },
         ]
 
-        tests = registry_tests + api_tests
+        # HTTP proxy connectivity test (before registry/MCR tests since
+        # those route through the proxy when configured)
+        proxy_tests = self._build_proxy_tests()
+
+        tests = proxy_tests + registry_tests + api_tests
 
         # Execute each test with dependency tracking
         failed_tests = set()  # Track which tests have failed to determine skip logic
@@ -480,6 +484,59 @@ class ConnectivityTester:
             acr_name = parts[-1]
             return f"{acr_name}.azurecr.io"
         return None
+
+    def _build_proxy_tests(self) -> List[Dict[str, Any]]:
+        """Build connectivity tests for the HTTP proxy server, if configured.
+
+        When a cluster uses an HTTP proxy, nodes must be able to reach
+        the proxy IP:port. This test runs before MCR/registry tests
+        since those succeed transparently through the proxy.
+        """
+        http_proxy_config = self.cluster_info.get("http_proxy_config")
+        if not http_proxy_config:
+            return []
+
+        proxy_url = (
+            http_proxy_config.get("https_proxy")
+            or http_proxy_config.get("http_proxy")
+            or ""
+        )
+        if not proxy_url:
+            return []
+
+        # Parse host and port from proxy URL
+        try:
+            from urllib.parse import urlparse  # pylint: disable=import-outside-toplevel
+            parsed = urlparse(proxy_url)
+            host = parsed.hostname
+            port = parsed.port or 8080
+            if not host:
+                return []
+        except (ValueError, TypeError):
+            return []
+
+        self.logger.info(
+            "  HTTP proxy configured (%s:%s). Adding proxy connectivity test.",
+            host, port,
+        )
+
+        return [
+            {
+                "name": "HTTP Proxy Connectivity",
+                "description": (
+                    f"Test TCP connectivity to HTTP proxy server "
+                    f"({host}:{port})"
+                ),
+                "command": (
+                    f"curl -v --max-time 15 --proxy-insecure "
+                    f"-x {proxy_url} https://mcr.microsoft.com/v2/"
+                ),
+                "expected_keywords": ["200", "401", "407", "HTTP/"],
+                "check_private_ip": False,
+                "critical": True,
+                "skip_group": None,
+            },
+        ]
 
     def _execute_node_test(self, node_instance, test: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a connectivity test on a node instance (VMSS or VM)"""

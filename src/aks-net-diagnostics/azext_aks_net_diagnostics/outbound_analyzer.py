@@ -13,9 +13,11 @@ Adapted for Azure CLI integration.
 # pylint: disable=too-few-public-methods
 # pylint: disable=too-many-instance-attributes,too-many-nested-blocks
 
+import ipaddress
 import logging
 import re
 from typing import Any, Dict, List, Optional, Set
+from urllib.parse import urlparse
 
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 
@@ -343,6 +345,11 @@ class OutboundConnectivityAnalyzer:
         """
         Check for HTTP proxy configuration on the cluster.
 
+        Validates:
+        1. Reports proxy config as informational finding
+        2. Checks if proxy IP is reachable from the node VNet
+           (via same VNet, VNet peering, or route table)
+
         Returns:
             Dictionary with proxy config summary if configured, None otherwise
         """
@@ -354,6 +361,10 @@ class OutboundConnectivityAnalyzer:
         https_proxy = http_proxy_config.get("https_proxy", "")
         no_proxy = http_proxy_config.get("no_proxy", [])
         has_trusted_ca = bool(http_proxy_config.get("trusted_ca"))
+
+        # Parse proxy IP and port from URL
+        proxy_url = https_proxy or http_proxy
+        proxy_ip, proxy_port = self._parse_proxy_url(proxy_url)
 
         # Mask credentials in proxy URLs for display
         proxy_display = https_proxy or http_proxy or "configured"
@@ -377,13 +388,138 @@ class OutboundConnectivityAnalyzer:
             )
         )
 
+        # Validate proxy IP reachability from node VNet
+        if proxy_ip:
+            self._check_proxy_reachability(proxy_ip, proxy_port)
+
         return {
             "enabled": True,
             "http_proxy": http_proxy or None,
             "https_proxy": https_proxy or None,
+            "proxy_ip": proxy_ip,
+            "proxy_port": proxy_port,
             "no_proxy_count": len(no_proxy) if no_proxy else 0,
             "trusted_ca": has_trusted_ca,
         }
+
+    @staticmethod
+    def _parse_proxy_url(proxy_url: str) -> tuple:
+        """Extract IP address and port from a proxy URL.
+
+        Returns:
+            Tuple of (ip_str_or_None, port_int_or_None)
+        """
+        if not proxy_url:
+            return None, None
+        try:
+            parsed = urlparse(proxy_url)
+            host = parsed.hostname
+            port = parsed.port
+            if host:
+                # Verify it's an IP (not a hostname we'd need to resolve)
+                ipaddress.ip_address(host)
+                return host, port
+        except (ValueError, TypeError):
+            pass
+        return None, None
+
+    def _check_proxy_reachability(self, proxy_ip: str, proxy_port: Optional[int]) -> None:
+        """Check if the proxy IP is reachable from the cluster's node VNet.
+
+        Verifies that the proxy IP is either:
+        - Within the node VNet address space, OR
+        - Reachable via an active VNet peering whose remote VNet covers the IP
+        """
+        try:
+            proxy_addr = ipaddress.ip_address(proxy_ip)
+        except ValueError:
+            return
+
+        # Collect node VNet info
+        node_vnets = self.vnets_info
+        if not node_vnets:
+            self.logger.debug("No VNet info available; skipping proxy reachability check")
+            return
+
+        # Check if proxy IP is inside any node VNet address space
+        for vnet in node_vnets:
+            for prefix in vnet.get("address_space", []):
+                try:
+                    if proxy_addr in ipaddress.ip_network(prefix, strict=False):
+                        self.logger.info(
+                            "  Proxy IP %s is within node VNet %s (%s)",
+                            proxy_ip, vnet.get("name"), prefix,
+                        )
+                        return  # reachable — same VNet
+                except ValueError:
+                    continue
+
+        # Proxy is outside node VNet — check VNet peerings
+        peering_covers = False
+        for vnet in node_vnets:
+            for peering in vnet.get("peerings", []):
+                if peering.get("peering_state", "").lower() != "connected":
+                    continue
+                remote_vnet_id = peering.get("remote_virtual_network", "")
+                if not remote_vnet_id:
+                    continue
+
+                # Resolve remote VNet address space
+                remote_prefixes = self._get_remote_vnet_prefixes(remote_vnet_id)
+                for prefix in remote_prefixes:
+                    try:
+                        if proxy_addr in ipaddress.ip_network(prefix, strict=False):
+                            peering_covers = True
+                            self.logger.info(
+                                "  Proxy IP %s reachable via peering %s to %s",
+                                proxy_ip, peering.get("name"), remote_vnet_id.split("/")[-1],
+                            )
+                            break
+                    except ValueError:
+                        continue
+                if peering_covers:
+                    break
+            if peering_covers:
+                break
+
+        if peering_covers:
+            return  # reachable via peering
+
+        # Not reachable via VNet or peering — emit CRITICAL finding
+        node_vnet_names = [v.get("name", "unknown") for v in node_vnets]
+        port_str = f":{proxy_port}" if proxy_port else ""
+        self.findings.append(
+            Finding.create_critical(
+                FindingCode.PROXY_NOT_REACHABLE,
+                f"HTTP proxy {proxy_ip}{port_str} is not within the "
+                f"cluster's node VNet ({', '.join(node_vnet_names)}) and "
+                f"no VNet peering was found that covers this IP. Nodes "
+                f"cannot reach the proxy server.",
+                f"Ensure a VNet peering exists between the node VNet and "
+                f"the VNet hosting the proxy server ({proxy_ip}), or add "
+                f"a route in the node subnet's route table that directs "
+                f"traffic to {proxy_ip} to the correct next hop.",
+                proxy_ip=proxy_ip,
+                proxy_port=proxy_port,
+                node_vnets=node_vnet_names,
+            )
+        )
+
+    def _get_remote_vnet_prefixes(self, remote_vnet_id: str) -> List[str]:
+        """Fetch address prefixes for a remote VNet by resource ID."""
+        try:
+            parts = remote_vnet_id.rstrip("/").split("/")
+            if len(parts) < 9:
+                return []
+            rg = parts[4]
+            vnet_name = parts[8]
+            vnet = self.network_client.virtual_networks.get(rg, vnet_name)
+            return vnet.address_space.address_prefixes if vnet.address_space else []
+        except (ResourceNotFoundError, HttpResponseError) as exc:
+            self.logger.debug("Cannot read remote VNet %s: %s", remote_vnet_id, exc)
+            return []
+        except Exception:  # pylint: disable=broad-except
+            return []
 
     def _check_default_outbound_access(self, outbound_type: str) -> None:
         """
