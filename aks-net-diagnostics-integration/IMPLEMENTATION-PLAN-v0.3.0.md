@@ -13,7 +13,7 @@
 | WI-5: defaultOutboundAccess | **Done** | `795efbd`, `14c4ed4` | Managed + BYO VNet |
 | WI-1: Outbound none/block | **Done** | `876816c`, `dc30e91` | Managed (block) + BYO (none) |
 | WI-2: HTTP proxy awareness | **Done** | `bd89d64`, `0c225e3` | Proxy cluster (3 breakage scenarios) |
-| WI-3: Service tags | Not started | -- | -- |
+| WI-3: Service tags | **Done** | `124677a` | Service tag cluster (single + multi) |
 | WI-4: NAP detection | Not started | -- | -- |
 | Enhancement: Probe tests for network isolation | **Done** | `6262ae2` | Managed (block) + BYO (none) |
 | Enhancement: NSG analyzer for network isolation | **Done** | `6a7e416` | Managed (block) + BYO (none) |
@@ -26,6 +26,7 @@
 - `aks-wi1-managed` (managed VNet, AKS-managed ACR, outbound: block) in `aks-wi1-test-rg`
 - `aks-wi1-byo` (BYO VNet `wi1-test-vnet`, BYO ACR `akswi1byoacr`, outbound: none) in `aks-wi1-test-rg`
 - `aks-proxy` (HTTP proxy via VNet peering, outbound: loadBalancer) in `aks-proxy-rg` — AKS VNet `aks-proxy-vnet` (10.100.0.0/16) peered to `proxy-svc-vnet` (172.12.0.0/16) in `proxy-svc-rg`, proxy VM at 172.12.0.4:8080
+- `aks-wi3-svc-tag` (service tags in authorized IP ranges, outbound: loadBalancer) in `aks-wi3-test-rg`
 
 ---
 
@@ -120,41 +121,39 @@ This release closes the high-priority gaps identified in the functionality and g
 
 ---
 
-### WI-3: Service Tags in Authorized IP Ranges
+### WI-3: Service Tags in Authorized IP Ranges — ✅ IMPLEMENTED
+
+**Status:** Implemented (`124677a`). Live-tested on dedicated cluster with single and multiple service tags.
 
 **Goal:** Detect service tag entries in `authorizedIpRanges`, avoid CIDR parsing errors, and report service tag constraints.
 
-**Files to modify:**
-- `api_server_analyzer.py` -- service tag detection and reporting
-- `models.py` -- new FindingCode value
+**Files modified:**
+- `api_server_analyzer.py` -- `_is_service_tag()`, `_analyze_service_tags()`, updated `_analyze_authorized_ip_ranges()`
+- `misconfiguration_analyzer.py` -- removed redundant `API_RESTRICTED_ACCESS` INFO finding
+- `models.py` -- `SERVICE_TAG_IN_AUTH_RANGES`, `SERVICE_TAG_VNET_INTEGRATION_CONFLICT`
 
-**Implementation:**
+**What was implemented:**
+1. `_is_service_tag()` static method using regex `^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z0-9]+)*$` to distinguish service tags (e.g. `AzureCloud`, `Storage.WestUS`) from CIDRs and bare IPs. Rejects entries with `/` (CIDR) or `:` (IPv6), and entries starting with digits.
+2. `_analyze_authorized_ip_ranges()` separates service tags from CIDR ranges before processing. Service tags skip CIDR security analysis entirely (no false "Invalid IP range format" warnings).
+3. `_analyze_service_tags()` emits three findings:
+   - INFO when service tags present (preview feature requiring `EnableServiceTagAuthorizedIPPreview` feature flag)
+   - WARNING when multiple service tags detected (only 1 allowed per cluster per AKS docs)
+   - WARNING when service tags + VNet Integration (incompatible per AKS docs)
+4. Outbound IP authorization check skipped when service tags present (tags like `AzureCloud` cover all Azure IPs including cluster outbound IPs — check is meaningless).
+5. Removed redundant `API_RESTRICTED_ACCESS` INFO finding from `misconfiguration_analyzer.py` — the WARNING "API server access restricted" from `security_findings` already covers it.
 
-1. **Service tag detection** (`api_server_analyzer.py`, in `_analyze_authorized_ip_ranges()` loop around line 162):
-   - Before calling `ipaddress.ip_network()`, check if the entry is a service tag
-   - Detection: entry does not contain `/` (no CIDR notation) and is not a bare IP address
-   - Known patterns: `AzureCloud`, `AzureCloud.eastus`, `ChaosStudio`, etc.
-   - Regex: `^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z0-9]+)*$` (starts with letter, alphanumeric with optional dot-separated region)
+**Prerequisites for live testing:**
+- `aks-preview` CLI extension (v19.0.0b29+)
+- `EnableServiceTagAuthorizedIPPreview` feature flag registered
+- `az provider register --namespace Microsoft.ContainerService` after flag registration
 
-2. **Service tag handling**:
-   - Skip CIDR parsing for service tag entries (avoid `ValueError`)
-   - Emit INFO finding: "Authorized IP ranges contain service tag: {tag_name}"
-   - Warn if more than one service tag is detected (only one allowed per cluster)
-   - Check for API Server VNet Integration incompatibility -- if VNet integration is active and service tags are present, emit WARNING
+**Live testing results (cluster `aks-wi3-svc-tag` in `aks-wi3-test-rg`):**
 
-3. **Mixed range support**:
-   - Process CIDR entries normally
-   - Skip service tag entries in CIDR-specific analysis (range size, prefix length, private detection)
-   - Include service tag entries in summary count
-
-4. **New FindingCode** (`models.py`):
-   - `SERVICE_TAG_IN_AUTH_RANGES` -- informational, service tag detected
-   - `SERVICE_TAG_VNET_INTEGRATION_CONFLICT` -- warning, incompatible configuration
-
-**Testing:**
-- Unit test with mixed CIDR + service tag entries, verify no parsing errors
-- Unit test with service tag + VNet integration, verify WARNING finding
-- Unit test with multiple service tags, verify constraint warning
+| Scenario | Findings |
+|----------|----------|
+| Single service tag (`AzureCloud` + CIDR) | 2: INFO service tag (preview) + WARNING restricted access |
+| Multiple service tags (`AzureCloud` + `ChaosStudio` + CIDR) | 3: INFO service tag + WARNING multiple tags + WARNING restricted |
+| CIDR-only (regression check, no cluster) | Outbound IP authorization check preserved |
 
 ---
 
@@ -320,13 +319,13 @@ HTTP_PROXY_CONFIGURED           (WI-2)
 PROXY_NOT_REACHABLE             (WI-2 / Enhancement)
 DEFAULT_OUTBOUND_ACCESS_DISABLED (WI-5)
 BOOTSTRAP_ACR_DNS_NOT_LINKED    (Enhancement)
-```
-
-Remaining (for WI-3 and WI-4):
-
-```
-SERVICE_TAG_IN_AUTH_RANGES       (WI-3)
+SERVICE_TAG_IN_AUTH_RANGES      (WI-3)
 SERVICE_TAG_VNET_INTEGRATION_CONFLICT (WI-3)
+```
+
+Remaining (for WI-4):
+
+```
 NAP_ENABLED                      (WI-4)
 NAP_SUBNET_NOT_ANALYZED          (WI-4)
 ```
@@ -370,5 +369,6 @@ These gaps are deferred to future releases:
 - [x] Live-tested: probe tests 4/4 passed on both cluster types
 - [x] Live-tested: negative test for missing ACR DNS VNet link → CRITICAL detected
 - [x] Live-tested: proxy cluster — working, NSG deny, broken peering (3 breakage scenarios)
+- [x] Live-tested: service tag in authorized IP ranges — single tag, multiple tags
 - [ ] Push commits to remote
-- [ ] Delete test resource groups (`aks-wi1-test-rg`, `aks-proxy-rg`, `proxy-svc-rg`)
+- [ ] Delete test resource groups (`aks-wi3-test-rg`)
