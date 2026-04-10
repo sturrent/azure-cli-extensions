@@ -22,6 +22,7 @@ Adapted for Azure CLI - uses pre-authenticated SDK clients.
 """
 
 import ipaddress
+import re
 from typing import Any, Dict, List, Optional
 
 
@@ -149,6 +150,18 @@ class APIServerAccessAnalyzer:  # pylint: disable=too-few-public-methods
             return "private_endpoint"
         return "public"
 
+    @staticmethod
+    def _is_service_tag(entry: str) -> bool:
+        """Check if an authorized IP range entry is a service tag rather than a CIDR.
+
+        Service tags are alphanumeric names with optional dot-separated regions
+        (e.g. AzureCloud, AzureCloud.eastus, Storage.WestUS, ChaosStudio).
+        They start with a letter and contain no '/' (CIDR) or ':' (IPv6).
+        """
+        if '/' in entry or ':' in entry:
+            return False
+        return bool(re.match(r'^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z0-9]+)*$', entry))
+
     def _analyze_authorized_ip_ranges(self):
         """Analyze authorized IP ranges configuration"""
         authorized_ranges = self.analysis_result["authorized_ip_ranges"]
@@ -167,6 +180,14 @@ class APIServerAccessAnalyzer:  # pylint: disable=too-few-public-methods
         self.analysis_result["analysis"]["ip_range_restriction"] = "enabled"
         self.analysis_result["analysis"]["range_count"] = len(authorized_ranges)
 
+        # Separate service tags from CIDR ranges
+        service_tags = [e for e in authorized_ranges if self._is_service_tag(e)]
+        cidr_ranges = [e for e in authorized_ranges if not self._is_service_tag(e)]
+
+        # Report service tags
+        if service_tags:
+            self._analyze_service_tags(service_tags)
+
         # Add warning about authorized IP ranges being active
         self.analysis_result["security_findings"].append(
             {
@@ -183,9 +204,76 @@ class APIServerAccessAnalyzer:  # pylint: disable=too-few-public-methods
             }
         )
 
-        # Analyze each range for security implications
-        for range_cidr in authorized_ranges:
+        # Analyze each CIDR range for security implications (skip service tags)
+        for range_cidr in cidr_ranges:
             self._analyze_ip_range_security(range_cidr)
+
+    def _analyze_service_tags(self, service_tags: List[str]):
+        """Analyze service tag entries in authorized IP ranges.
+
+        Args:
+            service_tags: List of service tag names found in authorizedIpRanges
+        """
+        tag_names = ', '.join(service_tags)
+
+        if self.logger:
+            self.logger.info("  - Service tag(s) detected in authorized IP ranges: %s", tag_names)
+
+        # INFO: report which service tags are present
+        self.analysis_result["security_findings"].append(
+            {
+                "severity": "info",
+                "issue": "Service tag in authorized IP ranges (preview)",
+                "description": (
+                    f"Authorized IP ranges contain service tag(s): {tag_names}. "
+                    "Service tags represent Azure service IP prefixes and are "
+                    "managed automatically. This feature is in preview and requires "
+                    "the EnableServiceTagAuthorizedIPPreview feature flag."
+                ),
+                "recommendation": (
+                    "Verify the EnableServiceTagAuthorizedIPPreview feature flag is "
+                    "registered in your subscription. Only one service tag is allowed "
+                    "per cluster."
+                ),
+            }
+        )
+        self.analysis_result["analysis"]["service_tags"] = service_tags
+
+        # WARNING: only one service tag is allowed per cluster
+        if len(service_tags) > 1:
+            self.analysis_result["security_findings"].append(
+                {
+                    "severity": "warning",
+                    "issue": "Multiple service tags in authorized IP ranges",
+                    "description": (
+                        f"Found {len(service_tags)} service tags ({tag_names}) but AKS only "
+                        "allows one service tag per cluster. The additional tags may be ignored "
+                        "or cause unexpected behavior."
+                    ),
+                    "recommendation": (
+                        "Remove extra service tags and keep only one. Use CIDR ranges for "
+                        "additional IP allowances."
+                    ),
+                }
+            )
+
+        # WARNING: service tags are incompatible with API Server VNet Integration
+        if self.analysis_result.get("vnet_integration", False):
+            self.analysis_result["security_findings"].append(
+                {
+                    "severity": "warning",
+                    "issue": "Service tag incompatible with VNet Integration",
+                    "description": (
+                        f"Service tag '{service_tags[0]}' is configured in authorized IP ranges "
+                        "but API Server VNet Integration is enabled. Service tags for "
+                        "authorized IP ranges are not compatible with VNet Integration."
+                    ),
+                    "recommendation": (
+                        "Remove the service tag from authorized IP ranges or disable "
+                        "API Server VNet Integration. Use CIDR-based authorized ranges instead."
+                    ),
+                }
+            )
 
     def _analyze_ip_range_security(self, range_cidr: str):
         """
@@ -346,7 +434,9 @@ class APIServerAccessAnalyzer:  # pylint: disable=too-few-public-methods
             )
 
             # Check if outbound IPs are in authorized ranges
-            if self.outbound_ips:
+            # Skip when service tags are present - tags like AzureCloud cover
+            # all Azure IPs including cluster outbound IPs
+            if self.outbound_ips and not self.analysis_result.get("analysis", {}).get("service_tags"):
                 outbound_implications = self._check_outbound_ip_authorization(authorized_ranges)
                 implications.extend(outbound_implications)
 

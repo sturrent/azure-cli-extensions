@@ -1292,18 +1292,9 @@ class MisconfigurationAnalyzer:  # pylint: disable=too-few-public-methods
                 ),
             })
         elif access_model == "restricted_public":
-            findings.append({
-                "severity": "info",
-                "code": "API_RESTRICTED_ACCESS",
-                "message": (
-                    f"API server access restricted to "
-                    f"{len(authorized_ranges)} authorized IP range(s)"
-                ),
-                "recommendation": (
-                    "Verify that all necessary IP ranges are included and "
-                    "review ranges periodically"
-                ),
-            })
+            # The WARNING "API server access restricted" from security_findings
+            # already covers this; no need for a duplicate INFO finding.
+            pass
 
     def _analyze_nsg_issues(
         self,
