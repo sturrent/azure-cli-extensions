@@ -12,7 +12,8 @@
 8. [Authentication Architecture](#authentication-architecture)
 9. [Design Decisions](#design-decisions)
 10. [Code Quality](#code-quality)
-11. [Testing Status](#testing-status)
+11. [SDK Compatibility](#sdk-compatibility-as_dict-format-change-in-sdk-41)
+12. [Testing Status](#testing-status)
 
 ## Overview
 
@@ -536,6 +537,44 @@ The `credential` object is also passed directly for cross-subscription scenarios
 | `azdev style` (pylint + flake8) | PASSED |
 | `az aks net-diagnostics --help` | Loads correctly |
 | `pip check` | No broken requirements |
+
+## SDK Compatibility: `as_dict()` Format Change in SDK 41
+
+### Problem
+
+Azure CLI 2.85.0 (April 2026) ships `azure-mgmt-containerservice` **41.0.0**, regenerated with a new code generator. The SDK's `as_dict()` method — used by `_to_dict()` in `cluster_data_collector.py` — returns a fundamentally different structure:
+
+| Aspect | SDK 40 (CLI ≤2.83) | SDK 41 (CLI ≥2.85) |
+|--------|--------------------|--------------------|
+| Key naming | `snake_case` | `camelCase` |
+| Structure | Flat | Nested under `properties` envelope |
+| Example | `d["agent_pool_profiles"]` | `d["properties"]["agentPoolProfiles"]` |
+
+This broke all `.get("snake_case_key")` access patterns across every module, causing "No agent pools found", "No managed resource group found", and false `NO_OUTBOUND_IPS` warnings on CLI 2.85.
+
+### Root Cause
+
+[Azure CLI PR #32955](https://github.com/Azure/azure-cli/pull/32955) vendored SDK 41.0.0 and bumped the API version to `2026-01-01`. The new SDK code generator produces a different `as_dict()` serialization format. The AKS CLI team's own code does **not** use `as_dict()` — they access SDK model attributes directly (e.g., `cluster.agent_pool_profiles`), which still works across SDK versions. Our extension's dict-based access pattern via `as_dict()` is unique and thus uniquely affected.
+
+### POC Fix: Approach A — Normalization Layer
+
+For the POC, a normalization layer in `_to_dict()` detects the SDK 41 format (presence of `properties` envelope and/or camelCase keys) and converts it to the flat snake_case structure that all downstream modules expect. This is ~50 lines in one file (`cluster_data_collector.py`) with zero changes to any analyzer.
+
+### Long-Term Direction: Approach C — Direct Attribute Access
+
+The correct long-term approach — aligned with how the AKS CLI team and other AKS extensions work — is to **stop using `as_dict()` entirely** and access SDK model attributes directly. This would:
+
+- Eliminate dependency on `as_dict()` serialization format, which is not a stable API contract
+- Align with the patterns used in the `acs` module and `aks-preview` extension
+- Enable type-safe attribute access with IDE support
+
+However, this requires a **major refactor** across all modules: `cluster_data_collector.py`, `orchestrator.py`, `nsg_analyzer.py`, `outbound_analyzer.py`, `dns_analyzer.py`, `connectivity_tester.py`, `misconfiguration_analyzer.py`, and `report_generator.py`. The `--json-report` export would also need to be updated since it currently serializes the dict structures directly. This refactor should be planned as a dedicated work item with proper testing coverage.
+
+### Key Lesson
+
+The `as_dict()` method is a serialization convenience, not a stable SDK interface. Its output format is determined by the SDK code generator and can change between SDK major versions. Production code that processes Azure resource data programmatically should use direct attribute access on SDK model objects, not dictionary key lookups on `as_dict()` output.
+
+See [SDK41-COMPAT-ANALYSIS.md](SDK41-COMPAT-ANALYSIS.md) for the full analysis with all four evaluated approaches and comparison matrix.
 
 ## Testing Status
 
