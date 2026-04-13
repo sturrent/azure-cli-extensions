@@ -307,7 +307,7 @@ For `none`/`block` clusters with a bootstrap ACR, the standard MCR DNS + interne
 ### Enhancement: NSG Analyzer for Network Isolation (`6a7e416`)
 
 Adapted NSG compliance checks to avoid false positives on network isolated clusters:
-- **Required rules**: For `none`/`block`, removed MCR and AzureCloud from required outbound rules. Only DNS (UDP 53) and NTP (UDP 123) remain required.
+- **Required rules**: For `none`/`block`, removed MCR and AzureCloud from required outbound rules. Only DNS (UDP 53) remains required. NTP (UDP 123) is not needed — AKS nodes use chrony with PTP from the Hyper-V host clock.
 - **Blocking rule detection for `block`**: Skip outbound blocking analysis entirely (AKS inserts deny rules intentionally)
 - **Blocking rule detection for `none`**: Only flag DNS blocking, not TCP 443 to MCR/AzureCloud
 - **Private cluster API server rule**: Also skip for network isolated clusters (not just traditional private clusters)
@@ -385,11 +385,11 @@ These gaps are deferred to future releases:
 
 | Gap | Reason |
 |-----|--------|
+| CIDR overlap detection | Detect VNet subnet CIDRs that conflict with pod CIDR (10.244.0.0/16) or service CIDR (10.0.0.0/16). Particularly relevant for NAP clusters with custom AKSNodeClass `vnetSubnetID` where Karpenter bypasses ARM validation. Existing `TODO` placeholder in `misconfiguration_analyzer.py` `_analyze_vnet_issues()`. High value for BYO VNet scenarios. |
 | Dual-stack / IPv6 | High effort, cross-cutting change across all analyzers |
 | Virtual Nodes (ACI) | Medium effort, moderate adoption |
 | AKS LocalDNS | Low impact, preview feature |
 | Custom endpoint testing | New CLI parameter design needed |
-| NTP validation | Low priority |
 | BYO CNI | Niche adoption |
 
 ---

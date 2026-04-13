@@ -152,23 +152,16 @@ class NSGAnalyzer(BaseAnalyzer):
                 },
             ])
 
-        # DNS and NTP are always required (private DNS resolution, time sync)
-        outbound_rules.extend([
-            {
-                "name": "AKS_DNS",
-                "protocol": "UDP",
-                "destination": "*",
-                "ports": ["53"],
-                "description": "DNS resolution",
-            },
-            {
-                "name": "AKS_NTP",
-                "protocol": "UDP",
-                "destination": "*",
-                "ports": ["123"],
-                "description": "Network Time Protocol",
-            },
-        ])
+        # DNS is always required (private DNS resolution)
+        # NTP is NOT required — AKS nodes use chrony with PTP from the
+        # Hyper-V host clock, no outbound UDP 123 needed.
+        outbound_rules.append({
+            "name": "AKS_DNS",
+            "protocol": "UDP",
+            "destination": "*",
+            "ports": ["53"],
+            "description": "DNS resolution",
+        })
 
         rules = {
             "outbound": outbound_rules,
