@@ -11,7 +11,8 @@
 7. [Data Flow](#data-flow)
 8. [Authentication Architecture](#authentication-architecture)
 9. [Design Decisions](#design-decisions)
-10. [Code Quality Metrics](#code-quality-metrics)
+10. [Code Quality](#code-quality)
+11. [Testing Status](#testing-status)
 
 ## Overview
 
@@ -86,7 +87,7 @@ src/aks-net-diagnostics/
 ├── HISTORY.rst                           # Release history
 ├── azext_aks_net_diagnostics/
 │   ├── __init__.py                       # AzCommandsLoader (extension entry point)
-│   ├── _version.py                       # Version: 0.2.0b2
+│   ├── _version.py                       # Version string
 │   ├── _help.py                          # Help text definitions
 │   ├── _params.py                        # CLI parameter definitions
 │   ├── _client_factory.py                # Azure SDK client factories (5 clients)
@@ -102,7 +103,7 @@ src/aks-net-diagnostics/
 │   ├── route_table_analyzer.py           # UDR impact analysis
 │   ├── api_server_analyzer.py            # API server access security
 │   ├── outbound_analyzer.py              # Outbound config (LB, NAT GW, UDR)
-│   ├── connectivity_tester.py            # Active probe tests via VMSS RunCommand
+│   ├── connectivity_tester.py            # Active probe tests via RunCommand (VMSS + VM)
 │   ├── misconfiguration_analyzer.py      # Cross-component correlation
 │   ├── report_generator.py              # Console + JSON report output
 │   │
@@ -119,7 +120,7 @@ src/aks-net-diagnostics/
 │           └── test_aks_net_diagnostics.py
 ```
 
-**Total: 21 Python modules, ~8,500 lines of code**
+**Total: 21 Python modules**
 
 ## Integration Design
 
@@ -213,7 +214,7 @@ def aks_net_diagnostics(cmd, client, resource_group_name, name,
 
 ## Module Breakdown
 
-### Orchestrator (`orchestrator.py`, 614 lines)
+### Orchestrator (`orchestrator.py`)
 
 Coordinates the 10-phase diagnostic workflow. Accepts pre-authenticated clients and parameters and returns a structured result dictionary.
 
@@ -243,29 +244,30 @@ def run_diagnostics(
 | 9 | | `MisconfigurationAnalyzer` | Cross-component correlation |
 | 10 | | `ReportGenerator` | Console + JSON output |
 
-Between phases the orchestrator enriches agent pool data with subnet CIDRs from actual VMSS/VM NICs (helper functions `_enrich_agent_pools_with_vmss_subnets`, `_enrich_agent_pools_with_vm_subnets`) and collects/deduplicates permission findings from all analyzers.
+Between phases the orchestrator enriches agent pool data with subnet CIDRs from actual VMSS/VM NICs (helper functions `_enrich_agent_pools_with_vmss_subnets`, `_enrich_agent_pools_with_vm_subnets`), runs NAP analysis for Karpenter VM detection (`_analyze_nap`, `_classify_nap_vms`, `_classify_nap_vmss`), and collects/deduplicates permission findings from all analyzers.
 
-### ClusterDataCollector (`cluster_data_collector.py`, 530 lines)
+### ClusterDataCollector (`cluster_data_collector.py`)
 
 Centralized Azure data gathering. Accepts individual SDK clients (AKS, AgentPools, Network, Compute).
 
 **Key Methods:**
 
 | Method | Data Source | Returns |
-|--------|-----------|---------|
-| `collect_cluster_info()` | AKS API | Cluster config, network profile, agent pools |
-| `collect_vnet_info()` | Network API | VNet topology, subnets, peerings |
+|--------|-----------|--------|
+| `collect_cluster_info()` | AKS API | Cluster config, network profile, agent pools, NAP detection |
+| `collect_vnet_info()` | Network API | VNet topology, subnets, peerings, `defaultOutboundAccess` |
 | `collect_vmss_info()` | Compute API | VMSS network profiles, instances |
-| `collect_vm_info()` | Compute API | VM NICs (for VirtualMachines node pools) |
+| `collect_vm_info()` | Compute API | VM NICs (for VirtualMachines node pools and NAP/Karpenter VMs) |
 
 Handles authorization errors gracefully by storing permission findings rather than raising exceptions, so downstream analyzers can still run on available data.
 
-### NSGAnalyzer (`nsg_analyzer.py`, 1,146 lines)
+### NSGAnalyzer (`nsg_analyzer.py`)
 
 Inherits `BaseAnalyzer`. Validates NSGs attached to subnets and NICs used by the cluster.
 
 **Analyzes:**
-- Required AKS outbound rules (MCR, Azure Cloud, DNS, NTP)
+- Required AKS outbound rules (MCR, AzureCloud, DNS) with adapted rule sets for network-isolated clusters
+- HTTP proxy NSG compliance (`AKS_HTTP_Proxy` rule, proxy traffic blocking detection)
 - Inter-node communication rules
 - Blocking rules and override detection
 - Service tag semantics
@@ -273,7 +275,7 @@ Inherits `BaseAnalyzer`. Validates NSGs attached to subnets and NICs used by the
 
 **Key Finding Codes:** `NSG_INTER_NODE_BLOCKED`, `NSG_BLOCKING_AKS_TRAFFIC`, `NSG_POTENTIAL_BLOCK`, `NSG_POD_CIDR_BLOCKED`, `NSG_POD_CIDR_PARTIAL`
 
-### DNSAnalyzer (`dns_analyzer.py`, 438 lines)
+### DNSAnalyzer (`dns_analyzer.py`)
 
 Inherits `BaseAnalyzer`. Validates DNS configuration and private DNS zone linkage.
 
@@ -285,7 +287,7 @@ Inherits `BaseAnalyzer`. Validates DNS configuration and private DNS zone linkag
 
 **Key Finding Codes:** `PRIVATE_DNS_MISCONFIGURED`, `DNS_RESOLUTION_FAILED`
 
-### RouteTableAnalyzer (`route_table_analyzer.py`, 419 lines)
+### RouteTableAnalyzer (`route_table_analyzer.py`)
 
 Evaluates User Defined Routes associated with cluster subnets.
 
@@ -296,62 +298,68 @@ Evaluates User Defined Routes associated with cluster subnets.
 
 **Key Finding Codes:** `UDR_CONFLICT`
 
-### OutboundConnectivityAnalyzer (`outbound_analyzer.py`, 827 lines)
+### OutboundConnectivityAnalyzer (`outbound_analyzer.py`)
 
 Determines effective outbound configuration and public IPs.
 
 **Analyzes:**
-- Outbound type: `loadBalancer`, `managedNATGateway`, `userAssignedNATGateway`, `userDefinedRouting`
+- Outbound type: `loadBalancer`, `managedNATGateway`, `userAssignedNATGateway`, `userDefinedRouting`, `none`, `block`
 - Load balancer frontend IPs and outbound rules
 - NAT Gateway resources and public IPs (managed and user-assigned)
 - UDR impact on outbound traffic path
+- Network-isolated clusters (`none`/`block`): bootstrap ACR validation
+- HTTP proxy: detection, VNet reachability via peering, proxy IP/port extraction
+- `defaultOutboundAccess` subnet awareness
 
-**Key Finding Codes:** `PERMISSION_INSUFFICIENT_LB`
+**Key Finding Codes:** `OUTBOUND_TYPE_NONE`, `OUTBOUND_TYPE_BLOCK`, `BOOTSTRAP_ACR_MISSING`, `HTTP_PROXY_CONFIGURED`, `PROXY_NOT_REACHABLE`, `DEFAULT_OUTBOUND_ACCESS_DISABLED`, `PERMISSION_INSUFFICIENT_LB`
 
-### APIServerAccessAnalyzer (`api_server_analyzer.py`, 519 lines)
+### APIServerAccessAnalyzer (`api_server_analyzer.py`)
 
 Validates API server network access configuration.
 
 **Analyzes:**
 - Public vs private cluster setup
 - VNet integration detection
-- Authorized IP ranges, validating cluster outbound IPs are included
+- Authorized IP ranges (CIDRs and service tags), validating cluster outbound IPs are included
+- Service tag detection, multiple-tag warnings, VNet Integration compatibility
 - UDR override detection, since a firewall or NVA may change the source IP
 
-**Key Finding Codes:** `API_ACCESS_RESTRICTED`
+**Key Finding Codes:** `API_ACCESS_RESTRICTED`, `SERVICE_TAG_IN_AUTH_RANGES`, `SERVICE_TAG_VNET_INTEGRATION_CONFLICT`
 
-### ConnectivityTester (`connectivity_tester.py`, 766 lines)
+### ConnectivityTester (`connectivity_tester.py`)
 
-Active probe testing using VMSS RunCommand. Only runs when `--probe-test` is specified.
+Active probe testing using RunCommand on VMSS and VM node pools. Only runs when `--probe-test` is specified.
 
 **Tests:**
-- MCR DNS resolution (`mcr.microsoft.com`)
-- Internet HTTPS connectivity (MCR pull endpoint)
-- API server DNS resolution
-- API server HTTPS connectivity
+- MCR DNS resolution and HTTPS connectivity (standard clusters)
+- Bootstrap ACR DNS and HTTPS connectivity (network-isolated `none`/`block` clusters)
+- API server DNS resolution and HTTPS connectivity (all clusters)
+- HTTP proxy connectivity (proxy-configured clusters)
 
 **Features:**
 - Dependency-aware execution (skips HTTPS test if DNS fails)
-- VMSS RunCommand execution with configurable timeouts
+- Supports both VMSS and standalone VM node pools (VirtualMachines type)
+- RunCommand execution with configurable timeouts
 - Permission detection for RunCommand failures
 
 **Key Finding Codes:** `PERMISSION_INSUFFICIENT_VMSS`
 
-### MisconfigurationAnalyzer (`misconfiguration_analyzer.py`, 1,282 lines)
+### MisconfigurationAnalyzer (`misconfiguration_analyzer.py`)
 
 Cross-component correlation engine. Receives results from all other analyzers and detects composite issues.
 
 **Analyzes:**
-- Cluster provisioning failures
-- Node pool failures
+- Cluster provisioning failures and cluster stopped state
+- Node pool provisioning failures
+- Bootstrap ACR private DNS (`privatelink.azurecr.io`) VNet link validation
 - Connectivity test result correlation
 - NSG compliance
-- DNS misconfiguration patterns
+- DNS misconfiguration patterns (system-managed, BYO, cross-subscription)
 - Permission context (prevents false positives when data is incomplete)
 
-**Key Finding Codes:** `CLUSTER_OPERATION_FAILURE`, `CLUSTER_STOPPED`
+**Key Finding Codes:** `CLUSTER_OPERATION_FAILURE`, `CLUSTER_STOPPED`, `BOOTSTRAP_ACR_DNS_NOT_LINKED`, `PRIVATE_DNS_MISCONFIGURED`
 
-### ReportGenerator (`report_generator.py`, 1,375 lines)
+### ReportGenerator (`report_generator.py`)
 
 Formats and outputs diagnostic results.
 
@@ -370,23 +378,23 @@ Formats and outputs diagnostic results.
 
 ### Shared Modules
 
-#### BaseAnalyzer (`base_analyzer.py`, 86 lines)
+#### BaseAnalyzer (`base_analyzer.py`)
 
 Abstract base class for `DNSAnalyzer` and `NSGAnalyzer`. Provides:
 - Common `__init__` accepting `clients` dict and `cluster_info`
 - `add_finding()` method with severity-aware logging
 - `get_cluster_property()` for safe nested dict traversal
 
-#### Models (`models.py`, 118 lines)
+#### Models (`models.py`)
 
 Data models and constants:
 - `Severity` enum: CRITICAL, HIGH, WARNING, INFO
-- `FindingCode` enum: 15 standardized finding codes
+- `FindingCode` enum: 27 standardized finding codes
 - `Finding` dataclass: severity, code, message, recommendation, details
 - `VMSSInstance` dataclass: VMSS instance metadata for probe testing
 - `DiagnosticResult` dataclass: container for all diagnostic output
 
-#### Exceptions (`exceptions.py`, 37 lines)
+#### Exceptions (`exceptions.py`)
 
 Custom exception hierarchy rooted in `AKSDiagnosticsError`:
 - `AzureSDKError`: API call failures (with error_code, status_code)
@@ -395,7 +403,7 @@ Custom exception hierarchy rooted in `AKSDiagnosticsError`:
 - `InvalidConfigurationError`: invalid cluster config
 - `ValidationError`: input validation failures
 
-#### InputValidator (`validators.py`, 142 lines)
+#### InputValidator (`validators.py`)
 
 Input validation and sanitization:
 - Cluster name / resource group name pattern matching
@@ -518,47 +526,55 @@ The `credential` object is also passed directly for cross-subscription scenarios
 - Permission checks from early phases inform later phases
 - Single point of control for result aggregation and report generation
 
-## Code Quality Metrics
-
-### Implementation Stats
-
-| Metric | Value |
-|--------|-------|
-| Python modules (excl. tests) | 21 |
-| Total lines of code | ~8,500 |
-| Diagnostic engine modules | 14 |
-| CLI integration modules | 7 (`__init__`, `commands`, `_params`, `_client_factory`, `custom`, `_help`, `_version`) |
-| Explicit dependencies | 1 (`azure-mgmt-network~=25.0`) |
-| Finding codes | 15 |
-| Azure SDK operations | 22 unique API calls |
-
-### Module Size Breakdown
-
-| Module | Lines | Role |
-|--------|-------|------|
-| `report_generator.py` | 1,375 | Report formatting |
-| `misconfiguration_analyzer.py` | 1,282 | Cross-component correlation |
-| `nsg_analyzer.py` | 1,146 | NSG validation |
-| `outbound_analyzer.py` | 827 | Outbound analysis |
-| `connectivity_tester.py` | 766 | Active probe tests |
-| `orchestrator.py` | 614 | Phase coordination |
-| `cluster_data_collector.py` | 530 | Data gathering |
-| `api_server_analyzer.py` | 519 | API server access |
-| `dns_analyzer.py` | 438 | DNS analysis |
-| `route_table_analyzer.py` | 419 | UDR analysis |
-| Other (7 modules) | ~624 | CLI integration + shared |
+## Code Quality
 
 ### Quality Checks
 
 | Check | Status |
 |-------|--------|
-| `azdev linter` (22 rules) | PASSED, 0 violations |
+| `azdev linter` | PASSED, 0 violations |
 | `azdev style` (pylint + flake8) | PASSED |
 | `az aks net-diagnostics --help` | Loads correctly |
 | `pip check` | No broken requirements |
 
+## Testing Status
+
+### Current State
+
+The extension has **zero automated test cases**. Running `azdev test aks-net-diagnostics` completes with `0 items`, and the pre-push hook reports:
+
+```
+Error: azdev test check failed. You can check the test logs in the 'test_results.xml' file.
+```
+
+The push still succeeds because the hook exits after the test stage, but this error signals a gap that must be addressed before submitting a PR to `Azure/azure-cli-extensions`.
+
+### Current Validation Approach
+
+All functionality is validated through **manual live testing** against real AKS clusters. For each release, purpose-built clusters are created covering the supported configuration matrix (kubenet, Azure CNI, overlay, private clusters, proxy, NAP/Karpenter, outbound types, etc.). The diagnostic command is run against each cluster and output is verified against expected findings.
+
+The [COVERAGE-MATRIX.md](COVERAGE-MATRIX.md) documents the scenarios tested for each release, including 21 live-tested scenarios for v0.3.0b1.
+
+While this approach provides high confidence in real-world behavior, it is not automated, not repeatable in CI, and does not cover edge cases or regression detection.
+
+### What Is Needed
+
+| Test Type | Purpose | Notes |
+|-----------|---------|-------|
+| **Unit tests** | Validate individual FindingCode detection logic | Requires mocking Azure SDK responses (ARM, VMSS, NSG, route tables, DNS zones) |
+| **Scenario tests** | End-to-end runs against recorded or mocked cluster configurations | Could use `azdev test` with recorded HTTP interactions |
+| **Integration tests** | Validate against live clusters in CI | Requires test subscription, cluster provisioning, and teardown |
+
+### Guidance Needed
+
+Before submitting a PR to the official `Azure/azure-cli-extensions` repo, guidance is needed from the AKS Product Group on:
+
+- **Test patterns**: Preferred mocking strategy for Azure SDK calls (e.g., `unittest.mock`, VCR.py/`pytest-recording`, or the `azure-devtools` test framework)
+- **Test infrastructure**: Whether live integration tests are required or if recorded/mocked tests are sufficient for acceptance
+- **CI expectations**: Minimum test coverage thresholds or specific test gates enforced by the upstream CI pipeline
+- **Test data**: How to handle test fixtures for complex resources like NSGs, route tables, and VMSS run-command outputs
+
 ---
 
-**Version:** 0.2.0b2  
-**Last Updated:** March 2026  
+**Last Updated:** April 2026
 **Status:** Preview, active development

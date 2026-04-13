@@ -1,6 +1,23 @@
 Release History
 ===============
 
+0.3.0b1 (2026-04-13)
+++++++++++++++++++++
+
+**Feature Enhancements**
+
+* **Network-Isolated Cluster Support**: Recognize outbound type ``none`` and ``block``, validate bootstrap ACR, suppress false-positive outbound findings
+* **HTTP Proxy Diagnostics**: Detect ``httpProxyConfig``, validate proxy VNet reachability via peering, NSG proxy compliance, active probe through proxy
+* **Service Tags in Authorized IP Ranges**: Detect service tag entries, warn about single-tag limit and VNet Integration conflict
+* **Node Auto-Provisioning (NAP) Detection**: Detect NAP-enabled clusters, identify Karpenter-managed VMs and VMSS, warn about unanalyzed subnets
+* **defaultOutboundAccess Awareness**: Surface subnet-level ``defaultOutboundAccess`` status (suppressed from CLI, preserved in JSON)
+* **Bootstrap ACR Private DNS Check**: CRITICAL validation that ``privatelink.azurecr.io`` zone is linked to node VNet
+* **NSG Network Isolation Adaptation**: Adapted required rules for ``none``/``block`` clusters (only DNS required)
+* **Bootstrap ACR Probe Tests**: DNS + HTTPS probes targeting bootstrap ACR for network-isolated clusters
+* **VM Node Pool Support**: Connectivity tester fallback to ``virtualMachines.runCommand`` for VirtualMachines-type agent pools
+* Removed NTP (UDP 123) from required NSG outbound rules — AKS nodes use chrony with PTP from the hypervisor
+* 12 new finding codes (27 total)
+
 0.2.0b2 (2026-02-18)
 ++++++++++++++++++++
 

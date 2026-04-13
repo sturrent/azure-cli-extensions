@@ -106,9 +106,21 @@ class NSGAnalyzer(BaseAnalyzer):
             return None
         return api_server_profile.get("subnet_id")
 
+    def _get_outbound_type(self) -> str:
+        """Get the cluster outbound type (lowercase)."""
+        network_profile = self.cluster_info.get("network_profile")
+        if isinstance(network_profile, dict):
+            return network_profile.get("outbound_type", "").lower()
+        return ""
+
     def _get_required_aks_rules(self, is_private_cluster: bool) -> Dict[str, List[Dict[str, str]]]:
         """
         Get required NSG rules for AKS based on cluster type.
+
+        For network isolated clusters (outbound type 'none' or 'block'),
+        MCR and Azure Cloud outbound rules are not required because these
+        clusters pull images from a private bootstrap ACR and do not need
+        internet egress for AKS management traffic.
 
         Args:
             is_private_cluster: Whether the cluster is private
@@ -116,8 +128,14 @@ class NSGAnalyzer(BaseAnalyzer):
         Returns:
             Dictionary of required inbound and outbound rules
         """
-        rules = {
-            "outbound": [
+        outbound_type = self._get_outbound_type()
+        is_network_isolated = outbound_type in ("none", "block")
+
+        outbound_rules = []
+
+        # MCR and Azure Cloud are only required for non-isolated clusters
+        if not is_network_isolated:
+            outbound_rules.extend([
                 {
                     "name": "AKS_Registry_Access",
                     "protocol": "TCP",
@@ -132,21 +150,21 @@ class NSGAnalyzer(BaseAnalyzer):
                     "ports": ["443"],
                     "description": "Azure management endpoints",
                 },
-                {
-                    "name": "AKS_DNS",
-                    "protocol": "UDP",
-                    "destination": "*",
-                    "ports": ["53"],
-                    "description": "DNS resolution",
-                },
-                {
-                    "name": "AKS_NTP",
-                    "protocol": "UDP",
-                    "destination": "*",
-                    "ports": ["123"],
-                    "description": "Network Time Protocol",
-                },
-            ],
+            ])
+
+        # DNS is always required (private DNS resolution)
+        # NTP is NOT required — AKS nodes use chrony with PTP from the
+        # Hyper-V host clock, no outbound UDP 123 needed.
+        outbound_rules.append({
+            "name": "AKS_DNS",
+            "protocol": "UDP",
+            "destination": "*",
+            "ports": ["53"],
+            "description": "DNS resolution",
+        })
+
+        rules = {
+            "outbound": outbound_rules,
             "inbound": [
                 {
                     "name": "AKS_Inter_Node_Communication",
@@ -165,7 +183,7 @@ class NSGAnalyzer(BaseAnalyzer):
             ],
         }
 
-        if not is_private_cluster:
+        if not is_private_cluster and not is_network_isolated:
             # Public clusters need API server access
             rules["outbound"].append(
                 {
@@ -177,7 +195,49 @@ class NSGAnalyzer(BaseAnalyzer):
                 }
             )
 
+        # When HTTP proxy is configured, nodes must reach the proxy IP
+        proxy_rule = self._get_proxy_required_rule()
+        if proxy_rule:
+            rules["outbound"].append(proxy_rule)
+
         return rules
+
+    def _get_proxy_required_rule(self) -> Optional[Dict[str, str]]:
+        """Build a required outbound rule for the HTTP proxy server, if configured."""
+        http_proxy_config = self.cluster_info.get("http_proxy_config")
+        if not http_proxy_config:
+            return None
+
+        proxy_url = (
+            http_proxy_config.get("https_proxy")
+            or http_proxy_config.get("http_proxy")
+            or ""
+        )
+        if not proxy_url:
+            return None
+
+        # Parse IP and port from proxy URL
+        try:
+            from urllib.parse import urlparse  # pylint: disable=import-outside-toplevel
+            parsed = urlparse(proxy_url)
+            host = parsed.hostname
+            port = parsed.port
+            if not host:
+                return None
+            # Verify it's an IP address
+            import ipaddress  # pylint: disable=import-outside-toplevel
+            ipaddress.ip_address(host)
+        except (ValueError, TypeError):
+            return None
+
+        port_str = str(port) if port else "8080"
+        return {
+            "name": "AKS_HTTP_Proxy",
+            "protocol": "TCP",
+            "destination": host,
+            "ports": [port_str],
+            "description": f"HTTP proxy server ({host}:{port_str})",
+        }
 
     def _analyze_subnet_nsgs(self) -> None:
         """Analyze NSGs associated with node and pod subnets."""
@@ -874,7 +934,23 @@ class NSGAnalyzer(BaseAnalyzer):
 
     # pylint: disable=too-many-nested-blocks
     def _analyze_nsg_compliance(self) -> None:
-        """Analyze NSG compliance with AKS requirements."""
+        """Analyze NSG compliance with AKS requirements.
+
+        For clusters with outbound type 'block', AKS inserts NSG deny
+        rules to block all egress. These are intentional and should not
+        be flagged as blocking AKS traffic.
+        """
+        outbound_type = self._get_outbound_type()
+
+        # For 'block' clusters, AKS-inserted deny rules are expected
+        if outbound_type == "block":
+            self.logger.info(
+                "  Outbound type 'block': skipping outbound blocking "
+                "rule analysis (AKS-managed deny rules are expected)"
+            )
+            self.nsg_analysis["blocking_rules"] = []
+            return
+
         all_nsgs = self.nsg_analysis["subnet_nsgs"] + self.nsg_analysis["nic_nsgs"]
         blocking_rules = []
 
@@ -939,13 +1015,66 @@ class NSGAnalyzer(BaseAnalyzer):
         self.nsg_analysis["blocking_rules"] = blocking_rules
 
     def _blocks_aks_traffic(self, dest: str, ports: str, protocol: str) -> bool:
-        """Check if rule blocks essential AKS traffic."""
-        # Check destination
+        """Check if rule blocks essential AKS traffic.
+
+        For network isolated clusters (outbound type 'none'), blocking
+        MCR or AzureCloud is not a problem since images come from a
+        private bootstrap ACR. Only DNS (UDP 53) blocking is flagged.
+
+        When HTTP proxy is configured, also checks if the rule blocks
+        traffic to the proxy server IP and port.
+        """
+        outbound_type = self._get_outbound_type()
+        is_network_isolated = outbound_type in ("none", "block")
+
+        if is_network_isolated:
+            # Only flag DNS blocking for network isolated clusters
+            if dest in ["*", "Internet"]:
+                if ("53" in str(ports) or "*" in str(ports)) and protocol.upper() in ["UDP", "*"]:
+                    return True
+            # Still check proxy blocking for network isolated clusters
+            return self._blocks_proxy_traffic(dest, ports, protocol)
+
+        # Standard clusters: check for MCR/Azure/Internet blocking on TCP 443
         if dest in ["*", "Internet"] or "MicrosoftContainerRegistry" in str(dest) or "AzureCloud" in str(dest):
             # Check ports and protocol
             if ("443" in str(ports) or "*" in str(ports)) and protocol.upper() in ["TCP", "*"]:
                 return True
+
+        # Also check proxy blocking for standard clusters
+        if self._blocks_proxy_traffic(dest, ports, protocol):
+            return True
+
         return False
+
+    def _blocks_proxy_traffic(self, dest: str, ports: str, protocol: str) -> bool:
+        """Check if a deny rule would block traffic to the HTTP proxy server."""
+        proxy_rule = self._get_proxy_required_rule()
+        if not proxy_rule:
+            return False
+
+        proxy_ip = proxy_rule["destination"]
+        proxy_port = proxy_rule["ports"][0]
+
+        # Check if destination matches the proxy IP
+        dest_matches = dest in ["*", "Internet"] or dest == proxy_ip
+
+        if not dest_matches:
+            return False
+
+        # Check if port matches
+        port_matches = (
+            "*" in str(ports)
+            or proxy_port in str(ports)
+        )
+        if not port_matches:
+            return False
+
+        # Check protocol (proxy is TCP)
+        if protocol.upper() not in ["TCP", "*"]:
+            return False
+
+        return True
 
     def _check_rule_precedence(
         self, deny_rule: Dict[str, Any], sorted_rules: List[Dict[str, Any]]

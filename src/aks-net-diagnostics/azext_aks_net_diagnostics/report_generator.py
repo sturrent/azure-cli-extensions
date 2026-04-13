@@ -1206,25 +1206,25 @@ class ReportGenerator:  # pylint: disable=too-many-instance-attributes
             nsg_groups = {}
             for nsg in nic_nsgs:
                 nsg_name = nsg.get("nsg_name", "unknown")
-                vmss_name = nsg.get("vmss_name", "unknown")
+                node_name = nsg.get("vmss_name") or nsg.get("vm_name", "unknown")
 
                 if nsg_name not in nsg_groups:
                     nsg_groups[nsg_name] = {
                         "nsg_data": nsg,
-                        "vmss_list": []
+                        "node_list": []
                     }
-                nsg_groups[nsg_name]["vmss_list"].append(vmss_name)
+                nsg_groups[nsg_name]["node_list"].append(node_name)
 
-            # Display each unique NSG with its associated VMSS instances
+            # Display each unique NSG with its associated node instances
             for nsg_name, group_data in nsg_groups.items():
                 nsg = group_data["nsg_data"]
-                vmss_list = group_data["vmss_list"]
+                node_list = group_data["node_list"]
                 custom_rules = len(nsg.get("rules", []))
                 default_rules = len(nsg.get("default_rules", []))
 
-                # Show NSG with all VMSS instances using it
-                vmss_names = ", ".join(vmss_list)
-                print(f"- **{nsg_name}** (used by: {vmss_names})")
+                # Show NSG with all node instances using it
+                node_names = ", ".join(node_list)
+                print(f"- **{nsg_name}** (used by: {node_names})")
                 print(
                     f"  - Custom Rules: {custom_rules}, "
                     f"Default Rules: {default_rules}"
@@ -1274,14 +1274,21 @@ class ReportGenerator:  # pylint: disable=too-many-instance-attributes
             print("## Findings")
             print()
 
-            # Separate permission findings from regular findings
+            # Separate permission findings and noise from regular findings
+            # DEFAULT_OUTBOUND_ACCESS_DISABLED is informational noise in console
+            # (subnet-level detail already covered by outbound type finding);
+            # it remains in the JSON output for programmatic consumers.
+            _suppress_console = {
+                "DEFAULT_OUTBOUND_ACCESS_DISABLED",
+            }
             permission_findings = [
                 f for f in self.findings
                 if f.get("code", "").startswith("PERMISSION_INSUFFICIENT")
             ]
             regular_findings = [
                 f for f in self.findings
-                if not f.get("code", "").startswith("PERMISSION_INSUFFICIENT")
+                if (not f.get("code", "").startswith("PERMISSION_INSUFFICIENT")
+                    and f.get("code", "") not in _suppress_console)
             ]
 
             # Count regular findings by severity
@@ -1303,6 +1310,11 @@ class ReportGenerator:  # pylint: disable=too-many-instance-attributes
             ])
 
             # Display findings summary
+            if not regular_findings and not permission_findings:
+                print("[OK] No issues detected in the network configuration!")
+                print()
+                return
+
             print("**Findings Summary:**")
             if critical_count > 0:
                 print(f"- [CRITICAL] {critical_count}")

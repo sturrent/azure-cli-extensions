@@ -184,6 +184,11 @@ class ClusterDataCollector:
                 f"Please check the cluster name and resource group."
             )
 
+        # Extract NAP (Node Auto-Provisioning) status
+        nap_profile = cluster_result.get("node_provisioning_profile") or {}
+        nap_mode = nap_profile.get("mode", "Manual")
+        cluster_result["nap_enabled"] = (nap_mode == "Auto")
+
         # Get agent pools from cluster's agent_pool_profiles
         # This provides the correct 'type' field (VirtualMachines vs VirtualMachineScaleSets)
         # as opposed to agent_pools_client.list() which returns ARM resource type
@@ -254,11 +259,15 @@ class ClusterDataCollector:
                             addr_prefixes = (subnet.address_prefixes
                                              if hasattr(subnet, 'address_prefixes')
                                              else None)
+                            default_outbound = getattr(
+                                subnet, 'default_outbound_access', None
+                            )
                             vnets_map[vnet_name]["subnets"].append({
                                 "id": subnet.id,
                                 "name": subnet.name,
                                 "address_prefix": subnet.address_prefix,
                                 "address_prefixes": addr_prefixes,
+                                "default_outbound_access": default_outbound,
                             })
 
                     # Get VNet peerings
@@ -411,6 +420,7 @@ class ClusterDataCollector:
 
         For node pools using Virtual Machines (not VMSS), this method collects
         individual VM details including network interfaces and configurations.
+        Also collects Karpenter-provisioned VMs when NAP is enabled.
 
         Args:
             cluster_info: Cluster configuration dictionary
@@ -419,13 +429,14 @@ class ClusterDataCollector:
         Returns:
             List of VM details with network profiles
         """
-        # Check if any agent pools use Virtual Machines
+        # Check if any agent pools use Virtual Machines or NAP is enabled
         has_vm_pools = any(
             pool.get("type") == "VirtualMachines" for pool in agent_pools
         )
+        nap_enabled = cluster_info.get("nap_enabled", False)
 
-        if not has_vm_pools:
-            # No VM pools, skip silently
+        if not has_vm_pools and not nap_enabled:
+            # No VM pools and no NAP, skip silently
             return []
 
         self.logger.info("Collecting node network configuration (VMs)...")

@@ -13,9 +13,11 @@ Adapted for Azure CLI integration.
 # pylint: disable=too-few-public-methods
 # pylint: disable=too-many-instance-attributes,too-many-nested-blocks
 
+import ipaddress
 import logging
 import re
 from typing import Any, Dict, List, Optional, Set
+from urllib.parse import urlparse
 
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 
@@ -32,6 +34,7 @@ class OutboundConnectivityAnalyzer:
         clients: Dict[str, Any],
         route_table_analysis: Optional[Dict[str, Any]] = None,
         vmss_info: Optional[List[Dict[str, Any]]] = None,
+        vnets_info: Optional[List[Dict[str, Any]]] = None,
         logger: Optional[logging.Logger] = None,
     ):
         """
@@ -46,6 +49,7 @@ class OutboundConnectivityAnalyzer:
                 - credential: Azure credentials
             route_table_analysis: Pre-computed route table analysis results (optional)
             vmss_info: VMSS configuration data from cluster (optional)
+            vnets_info: VNet analysis data including subnet details (optional)
             logger: Optional logger instance
         """
         self.cluster_info = cluster_info
@@ -55,6 +59,7 @@ class OutboundConnectivityAnalyzer:
         self.credential = clients["credential"]
         self.route_table_analysis = route_table_analysis or {}
         self.vmss_info = vmss_info or []
+        self.vnets_info = vnets_info or []
         self.logger = logger or logging.getLogger(__name__)
 
         # Results storage
@@ -138,6 +143,26 @@ class OutboundConnectivityAnalyzer:
             self._analyze_udr_outbound()
         elif outbound_type in ("managedNATGateway", "userAssignedNATGateway"):
             self._analyze_nat_gateway_outbound(show_details, outbound_type)
+        elif outbound_type == "none":
+            self._analyze_none_outbound()
+        elif outbound_type == "block":
+            self._analyze_block_outbound()
+        else:
+            self.findings.append(
+                Finding.create_info(
+                    FindingCode.OUTBOUND_TYPE_UNSUPPORTED,
+                    f"Unrecognized outbound type: '{outbound_type}'",
+                    "This outbound type is not yet supported by the "
+                    "diagnostics extension. Analysis may be incomplete.",
+                    outbound_type=outbound_type,
+                )
+            )
+
+        # Check subnet defaultOutboundAccess settings
+        self._check_default_outbound_access()
+
+        # Check HTTP proxy configuration
+        http_proxy_config = self._check_http_proxy_config()
 
         # Use pre-computed route table analysis from Phase 3
         # (no need to re-analyze - it's already been done)
@@ -153,6 +178,7 @@ class OutboundConnectivityAnalyzer:
             "configured_public_ips": self.outbound_ips.copy(),
             "effective_outbound": effective_outbound_summary,
             "udr_analysis": udr_analysis if udr_analysis.get("route_tables") else None,
+            "http_proxy_config": http_proxy_config,
         }
 
         # Display summary of effective outbound configuration
@@ -301,8 +327,227 @@ class OutboundConnectivityAnalyzer:
                     effective_summary["description"] = (
                         "Managed NAT Gateway (no outbound IPs detected)"
                     )
+            elif outbound_type == "none":
+                effective_summary["description"] = (
+                    "Outbound type 'none': no AKS-managed egress. "
+                    "User manages outbound connectivity or cluster "
+                    "operates without internet access"
+                )
+            elif outbound_type == "block":
+                effective_summary["description"] = (
+                    "Outbound type 'block': AKS actively blocks all "
+                    "egress traffic from the cluster"
+                )
 
         return effective_summary
+
+    def _check_http_proxy_config(self) -> Optional[Dict[str, Any]]:
+        """
+        Check for HTTP proxy configuration on the cluster.
+
+        Validates:
+        1. Reports proxy config as informational finding
+        2. Checks if proxy IP is reachable from the node VNet
+           (via same VNet, VNet peering, or route table)
+
+        Returns:
+            Dictionary with proxy config summary if configured, None otherwise
+        """
+        http_proxy_config = self.cluster_info.get("http_proxy_config")
+        if not http_proxy_config:
+            return None
+
+        http_proxy = http_proxy_config.get("http_proxy", "")
+        https_proxy = http_proxy_config.get("https_proxy", "")
+        no_proxy = http_proxy_config.get("no_proxy", [])
+        has_trusted_ca = bool(http_proxy_config.get("trusted_ca"))
+
+        # Parse proxy IP and port from URL
+        proxy_url = https_proxy or http_proxy
+        proxy_ip, proxy_port = self._parse_proxy_url(proxy_url)
+
+        # Mask credentials in proxy URLs for display
+        proxy_display = https_proxy or http_proxy or "configured"
+
+        self.findings.append(
+            Finding.create_info(
+                FindingCode.HTTP_PROXY_CONFIGURED,
+                f"Cluster uses HTTP proxy for outbound traffic: "
+                f"{proxy_display}. Node and pod traffic is routed "
+                f"through the proxy rather than directly to "
+                f"destination IPs.",
+                "NSG outbound rules must allow traffic to the proxy "
+                "server IP. Direct outbound rules to MCR/Azure "
+                "services may not be required if the proxy handles "
+                "those destinations. Connectivity test results may "
+                "succeed transparently through the proxy.",
+                http_proxy=http_proxy or "not set",
+                https_proxy=https_proxy or "not set",
+                no_proxy_count=len(no_proxy) if no_proxy else 0,
+                trusted_ca="configured" if has_trusted_ca else "not set",
+            )
+        )
+
+        # Validate proxy IP reachability from node VNet
+        if proxy_ip:
+            self._check_proxy_reachability(proxy_ip, proxy_port)
+
+        return {
+            "enabled": True,
+            "http_proxy": http_proxy or None,
+            "https_proxy": https_proxy or None,
+            "proxy_ip": proxy_ip,
+            "proxy_port": proxy_port,
+            "no_proxy_count": len(no_proxy) if no_proxy else 0,
+            "trusted_ca": has_trusted_ca,
+        }
+
+    @staticmethod
+    def _parse_proxy_url(proxy_url: str) -> tuple:
+        """Extract IP address and port from a proxy URL.
+
+        Returns:
+            Tuple of (ip_str_or_None, port_int_or_None)
+        """
+        if not proxy_url:
+            return None, None
+        try:
+            parsed = urlparse(proxy_url)
+            host = parsed.hostname
+            port = parsed.port
+            if host:
+                # Verify it's an IP (not a hostname we'd need to resolve)
+                ipaddress.ip_address(host)
+                return host, port
+        except (ValueError, TypeError):
+            pass
+        return None, None
+
+    def _check_proxy_reachability(self, proxy_ip: str, proxy_port: Optional[int]) -> None:
+        """Check if the proxy IP is reachable from the cluster's node VNet.
+
+        Verifies that the proxy IP is either:
+        - Within the node VNet address space, OR
+        - Reachable via an active VNet peering whose remote VNet covers the IP
+        """
+        try:
+            proxy_addr = ipaddress.ip_address(proxy_ip)
+        except ValueError:
+            return
+
+        # Collect node VNet info
+        node_vnets = self.vnets_info
+        if not node_vnets:
+            self.logger.debug("No VNet info available; skipping proxy reachability check")
+            return
+
+        # Check if proxy IP is inside any node VNet address space
+        for vnet in node_vnets:
+            for prefix in vnet.get("address_space", []):
+                try:
+                    if proxy_addr in ipaddress.ip_network(prefix, strict=False):
+                        self.logger.info(
+                            "  Proxy IP %s is within node VNet %s (%s)",
+                            proxy_ip, vnet.get("name"), prefix,
+                        )
+                        return  # reachable — same VNet
+                except ValueError:
+                    continue
+
+        # Proxy is outside node VNet — check VNet peerings
+        peering_covers = False
+        for vnet in node_vnets:
+            for peering in vnet.get("peerings", []):
+                if peering.get("peering_state", "").lower() != "connected":
+                    continue
+                remote_vnet_id = peering.get("remote_virtual_network", "")
+                if not remote_vnet_id:
+                    continue
+
+                # Resolve remote VNet address space
+                remote_prefixes = self._get_remote_vnet_prefixes(remote_vnet_id)
+                for prefix in remote_prefixes:
+                    try:
+                        if proxy_addr in ipaddress.ip_network(prefix, strict=False):
+                            peering_covers = True
+                            self.logger.info(
+                                "  Proxy IP %s reachable via peering %s to %s",
+                                proxy_ip, peering.get("name"), remote_vnet_id.split("/")[-1],
+                            )
+                            break
+                    except ValueError:
+                        continue
+                if peering_covers:
+                    break
+            if peering_covers:
+                break
+
+        if peering_covers:
+            return  # reachable via peering
+
+        # Not reachable via VNet or peering — emit CRITICAL finding
+        node_vnet_names = [v.get("name", "unknown") for v in node_vnets]
+        port_str = f":{proxy_port}" if proxy_port else ""
+        self.findings.append(
+            Finding.create_critical(
+                FindingCode.PROXY_NOT_REACHABLE,
+                f"HTTP proxy {proxy_ip}{port_str} is not within the "
+                f"cluster's node VNet ({', '.join(node_vnet_names)}) and "
+                f"no VNet peering was found that covers this IP. Nodes "
+                f"cannot reach the proxy server.",
+                f"Ensure a VNet peering exists between the node VNet and "
+                f"the VNet hosting the proxy server ({proxy_ip}), or add "
+                f"a route in the node subnet's route table that directs "
+                f"traffic to {proxy_ip} to the correct next hop.",
+                proxy_ip=proxy_ip,
+                proxy_port=proxy_port,
+                node_vnets=node_vnet_names,
+            )
+        )
+
+    def _get_remote_vnet_prefixes(self, remote_vnet_id: str) -> List[str]:
+        """Fetch address prefixes for a remote VNet by resource ID."""
+        try:
+            parts = remote_vnet_id.rstrip("/").split("/")
+            if len(parts) < 9:
+                return []
+            rg = parts[4]
+            vnet_name = parts[8]
+            vnet = self.network_client.virtual_networks.get(rg, vnet_name)
+            return vnet.address_space.address_prefixes if vnet.address_space else []
+        except (ResourceNotFoundError, HttpResponseError) as exc:
+            self.logger.debug("Cannot read remote VNet %s: %s", remote_vnet_id, exc)
+            return []
+        except Exception:  # pylint: disable=broad-except
+            return []
+
+    def _check_default_outbound_access(self) -> None:
+        """
+        Check subnet defaultOutboundAccess settings and report
+        private subnet status.
+
+        Since March 31, 2026, new AKS-managed VNet subnets default to
+        defaultOutboundAccess=false (private subnets).
+        """
+        vnets = self.vnets_info
+        for vnet in vnets:
+            for subnet in vnet.get("subnets", []):
+                default_outbound = subnet.get("default_outbound_access")
+                if default_outbound is False:
+                    subnet_name = subnet.get("name", "unknown")
+                    self.findings.append(
+                        Finding.create_info(
+                            FindingCode.DEFAULT_OUTBOUND_ACCESS_DISABLED,
+                            f"Subnet '{subnet_name}' has defaultOutboundAccess "
+                            f"disabled (private subnet)",
+                            "This is expected for clusters created after March 31, "
+                            "2026, or for BYO VNets with private subnets. The "
+                            "cluster's configured outbound type determines how "
+                            "outbound connectivity is provided.",
+                            subnet_name=subnet_name,
+                            vnet_name=vnet.get("name", "unknown"),
+                        )
+                    )
 
     def _display_outbound_summary(self, effective_summary: Dict[str, Any]) -> None:
         """
@@ -477,6 +722,92 @@ class OutboundConnectivityAnalyzer:
             # User-assigned NAT Gateway - check subnets for attached NAT Gateway
             self._analyze_user_assigned_nat_gateway(show_details)
 
+    def _analyze_none_outbound(self) -> None:
+        """
+        Handle outbound type 'none' -- network isolated clusters where
+        AKS does not provision any egress path. The user is responsible
+        for outbound connectivity (or the cluster runs without internet).
+        """
+        self.logger.info("  - Outbound type: none (no AKS-managed egress)")
+
+        bootstrap_profile = self.cluster_info.get("bootstrap_profile", {})
+        bootstrap_acr = (
+            bootstrap_profile.get("container_registry_id")
+            if bootstrap_profile
+            else None
+        )
+
+        self.findings.append(
+            Finding.create_info(
+                FindingCode.OUTBOUND_TYPE_NONE,
+                "Cluster uses outbound type 'none'. AKS does not provision "
+                "any egress path. Outbound connectivity is user-managed or "
+                "the cluster operates without internet access.",
+                "Verify that required outbound paths (if any) are configured "
+                "through UDRs, NAT Gateway, or HTTP proxy outside of AKS. "
+                "For network isolated clusters, ensure the bootstrap ACR "
+                "and its private endpoint are properly configured.",
+                bootstrap_acr=bootstrap_acr or "not configured",
+            )
+        )
+
+        if not bootstrap_acr:
+            self.findings.append(
+                Finding.create_warning(
+                    FindingCode.BOOTSTRAP_ACR_MISSING,
+                    "Outbound type is 'none' but no bootstrap ACR is "
+                    "configured (bootstrapProfile.containerRegistryId). "
+                    "Network isolated clusters require a private ACR "
+                    "for image pulls.",
+                    "If this is a network isolated cluster, configure a "
+                    "bootstrap ACR with '--bootstrap-artifact-source Cache "
+                    "--bootstrap-container-registry-resource-id <ACR_ID>'. "
+                    "If outbound connectivity is provided via UDR or proxy, "
+                    "this warning can be ignored.",
+                )
+            )
+
+    def _analyze_block_outbound(self) -> None:
+        """
+        Handle outbound type 'block' (preview) -- AKS actively blocks
+        all egress traffic from the cluster.
+        """
+        self.logger.info("  - Outbound type: block (all egress blocked by AKS)")
+
+        bootstrap_profile = self.cluster_info.get("bootstrap_profile", {})
+        bootstrap_acr = (
+            bootstrap_profile.get("container_registry_id")
+            if bootstrap_profile
+            else None
+        )
+
+        self.findings.append(
+            Finding.create_info(
+                FindingCode.OUTBOUND_TYPE_BLOCK,
+                "Cluster uses outbound type 'block' (preview). AKS actively "
+                "blocks all egress traffic. This requires a bootstrap ACR "
+                "with private endpoint for image pulls.",
+                "Ensure the bootstrap ACR and its private endpoint are "
+                "properly configured. All required images must be cached "
+                "in the bootstrap ACR.",
+                bootstrap_acr=bootstrap_acr or "not configured",
+            )
+        )
+
+        if not bootstrap_acr:
+            self.findings.append(
+                Finding.create_critical(
+                    FindingCode.BOOTSTRAP_ACR_MISSING,
+                    "Outbound type is 'block' but no bootstrap ACR is "
+                    "configured (bootstrapProfile.containerRegistryId). "
+                    "Clusters with outbound type 'block' cannot pull images "
+                    "from public registries.",
+                    "Configure a bootstrap ACR with "
+                    "'--bootstrap-artifact-source Cache "
+                    "--bootstrap-container-registry-resource-id <ACR_ID>'.",
+                )
+            )
+
     def _analyze_managed_nat_gateway(self, show_details: bool = False) -> None:
         """
         Analyze managed NAT Gateway configuration (in node resource group)
@@ -543,9 +874,6 @@ class OutboundConnectivityAnalyzer:
                                 self.logger.info("      Public IP Prefix: %s", ip_prefix)
                             # Extract first IP from prefix for outbound IP tracking
                             try:
-                                import ipaddress  # pylint: disable=import-outside-toplevel
-
-                                # Validate the prefix
                                 ipaddress.ip_network(ip_prefix, strict=False)
                                 self.outbound_ips.append(f"{ip_prefix} (range)")
                             except Exception:  # pylint: disable=broad-except
@@ -671,7 +999,6 @@ class OutboundConnectivityAnalyzer:
                 self.logger.info("      Public IP Prefix: %s", ip_prefix)
             # Validate and add the prefix
             try:
-                import ipaddress  # pylint: disable=import-outside-toplevel
                 ipaddress.ip_network(ip_prefix, strict=False)
                 self.outbound_ips.append(f"{ip_prefix} (range)")
             except Exception:  # pylint: disable=broad-except
