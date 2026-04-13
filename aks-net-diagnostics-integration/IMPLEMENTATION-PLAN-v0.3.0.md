@@ -399,7 +399,7 @@ These gaps are deferred to future releases:
 - [x] `az aks net-diagnostics --help` loads successfully
 - [x] `azdev linter aks-net-diagnostics` passes with 0 violations (verified at each commit)
 - [x] `azdev style aks-net-diagnostics` passes
-- [ ] Unit tests pass for all new FindingCode paths
+- [ ] Unit tests (not yet implemented — no tests exist for any version; covered by live testing)
 - [x] Existing functionality unchanged (verified via live testing against standard clusters)
 - [x] Version bumped to 0.3.0b1
 - [x] HISTORY.rst updated with changelog
