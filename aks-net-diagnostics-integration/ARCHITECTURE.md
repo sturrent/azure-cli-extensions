@@ -12,6 +12,7 @@
 8. [Authentication Architecture](#authentication-architecture)
 9. [Design Decisions](#design-decisions)
 10. [Code Quality](#code-quality)
+11. [Testing Status](#testing-status)
 
 ## Overview
 
@@ -535,6 +536,43 @@ The `credential` object is also passed directly for cross-subscription scenarios
 | `azdev style` (pylint + flake8) | PASSED |
 | `az aks net-diagnostics --help` | Loads correctly |
 | `pip check` | No broken requirements |
+
+## Testing Status
+
+### Current State
+
+The extension has **zero automated test cases**. Running `azdev test aks-net-diagnostics` completes with `0 items`, and the pre-push hook reports:
+
+```
+Error: azdev test check failed. You can check the test logs in the 'test_results.xml' file.
+```
+
+The push still succeeds because the hook exits after the test stage, but this error signals a gap that must be addressed before submitting a PR to `Azure/azure-cli-extensions`.
+
+### Current Validation Approach
+
+All functionality is validated through **manual live testing** against real AKS clusters. For each release, purpose-built clusters are created covering the supported configuration matrix (kubenet, Azure CNI, overlay, private clusters, proxy, NAP/Karpenter, outbound types, etc.). The diagnostic command is run against each cluster and output is verified against expected findings.
+
+The [COVERAGE-MATRIX.md](COVERAGE-MATRIX.md) documents the scenarios tested for each release, including 21 live-tested scenarios for v0.3.0b1.
+
+While this approach provides high confidence in real-world behavior, it is not automated, not repeatable in CI, and does not cover edge cases or regression detection.
+
+### What Is Needed
+
+| Test Type | Purpose | Notes |
+|-----------|---------|-------|
+| **Unit tests** | Validate individual FindingCode detection logic | Requires mocking Azure SDK responses (ARM, VMSS, NSG, route tables, DNS zones) |
+| **Scenario tests** | End-to-end runs against recorded or mocked cluster configurations | Could use `azdev test` with recorded HTTP interactions |
+| **Integration tests** | Validate against live clusters in CI | Requires test subscription, cluster provisioning, and teardown |
+
+### Guidance Needed
+
+Before submitting a PR to the official `Azure/azure-cli-extensions` repo, guidance is needed from the AKS Product Group on:
+
+- **Test patterns**: Preferred mocking strategy for Azure SDK calls (e.g., `unittest.mock`, VCR.py/`pytest-recording`, or the `azure-devtools` test framework)
+- **Test infrastructure**: Whether live integration tests are required or if recorded/mocked tests are sufficient for acceptance
+- **CI expectations**: Minimum test coverage thresholds or specific test gates enforced by the upstream CI pipeline
+- **Test data**: How to handle test fixtures for complex resources like NSGs, route tables, and VMSS run-command outputs
 
 ---
 
