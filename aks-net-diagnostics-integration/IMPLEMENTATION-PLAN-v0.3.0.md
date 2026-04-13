@@ -2,7 +2,7 @@
 
 **Branch:** `aks-net-diagnostics-v0.3.0`
 **Base:** `aks-net-diagnostics-extension` (v0.2.0b2)
-**Reference:** [net-diagnostics-functionality-and-gaps.md](net-diagnostics-functionality-and-gaps.md)
+**Reference:** [net-diagnostics-functionality-and-gaps.md](archive/net-diagnostics-functionality-and-gaps.md)
 
 ---
 
@@ -362,11 +362,11 @@ SERVICE_TAG_IN_AUTH_RANGES      (WI-3)
 SERVICE_TAG_VNET_INTEGRATION_CONFLICT (WI-3)
 ```
 
-Remaining (for WI-4):
+Remaining (for WI-4) — now implemented:
 
 ```
-NAP_ENABLED                      (WI-4)
-NAP_SUBNET_NOT_ANALYZED          (WI-4)
+NAP_ENABLED                      (WI-4) ✅
+NAP_SUBNET_NOT_ANALYZED          (WI-4) ✅
 ```
 
 ### Version Bump
@@ -390,7 +390,7 @@ These gaps are deferred to future releases:
 | Virtual Nodes (ACI) | Medium effort, moderate adoption |
 | AKS LocalDNS | Low impact, preview feature |
 | Custom endpoint testing | New CLI parameter design needed |
-| BYO CNI | Niche adoption |
+| BYO CNI | Pending evaluation for future release |
 
 ---
 
@@ -401,8 +401,8 @@ These gaps are deferred to future releases:
 - [x] `azdev style aks-net-diagnostics` passes
 - [ ] Unit tests pass for all new FindingCode paths
 - [x] Existing functionality unchanged (verified via live testing against standard clusters)
-- [ ] Version bumped to 0.3.0b1
-- [ ] HISTORY.rst updated with changelog
+- [x] Version bumped to 0.3.0b1
+- [x] HISTORY.rst updated with changelog
 - [x] Live-tested: managed VNet + AKS-managed ACR (outbound block)
 - [x] Live-tested: BYO VNet + BYO ACR (outbound none)
 - [x] Live-tested: probe tests 4/4 passed on both cluster types
@@ -412,5 +412,5 @@ These gaps are deferred to future releases:
 - [x] Live-tested: NAP managed VNet — NAP_ENABLED detected, probes pass
 - [x] Live-tested: NAP BYO VNet — Karpenter VM detected, NIC NSG mapped correctly
 - [x] Live-tested: NAP BYO VNet + NSG breakage — 3 blocking findings detected on nap-subnet
-- [ ] Push commits to remote
-- [ ] Delete test resource groups (`aks-wi3-test-rg`)
+- [x] Push commits to remote
+- [ ] Delete test resource groups (`aks-nap-byo-rg`, `aks-wi4-test-rg`)
