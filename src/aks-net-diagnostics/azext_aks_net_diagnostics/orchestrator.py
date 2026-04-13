@@ -271,6 +271,145 @@ def _enrich_agent_pools_with_vmss_subnets(
                     break
 
 
+def _analyze_nap(
+    cluster_info: Dict[str, Any],
+    agent_pools: List[Dict[str, Any]],
+    vmss_analysis: List[Dict[str, Any]],
+    vnets_analysis: List[Dict[str, Any]],
+    logger: logging.Logger
+) -> List[Dict[str, Any]]:
+    """
+    Analyze Node Auto-Provisioning (NAP/Karpenter) status and subnet coverage.
+
+    NAP uses Karpenter to dynamically provision nodes. Nodes may use subnets
+    specified in AKSNodeClass CRDs, which can differ from traditional node pool
+    subnets. This function detects NAP and checks whether all NAP VMSS subnets
+    are covered by the extension's VNet analysis.
+
+    Args:
+        cluster_info: Cluster configuration dictionary
+        agent_pools: List of agent pool configurations
+        vmss_analysis: List of VMSS analysis data
+        vnets_analysis: List of VNet analysis results
+        logger: Logger instance
+
+    Returns:
+        List of NAP-related findings (as dicts)
+    """
+    nap_profile = cluster_info.get("node_provisioning_profile") or {}
+
+    # INFO: NAP is enabled
+    nap_finding = {
+        "severity": "info",
+        "code": "NAP_ENABLED",
+        "message": "Node Auto-Provisioning (NAP/Karpenter) is enabled on this cluster",
+        "recommendation": (
+            "NAP dynamically provisions nodes using Karpenter. "
+            "Nodes may use subnets specified in AKSNodeClass custom resources, "
+            "which may differ from the subnets configured in traditional node pools. "
+            "Ensure all NAP-used subnets have correct NSG rules and DNS configuration. "
+            "See: https://learn.microsoft.com/en-us/azure/aks/node-auto-provisioning"
+        ),
+        "details": {
+            "nap_mode": nap_profile.get("mode", "Auto"),
+            "default_node_pools": nap_profile.get("default_node_pools", "Auto"),
+        }
+    }
+    nap_findings = [nap_finding]
+
+    logger.info("  NAP (Node Auto-Provisioning) is enabled (mode: %s)", nap_finding["details"]["nap_mode"])
+
+    # Collect analyzed subnet IDs from VNet analysis
+    analyzed_subnet_ids = {
+        subnet.get("id", "").lower()
+        for vnet in vnets_analysis
+        for subnet in vnet.get("subnets", [])
+        if subnet.get("id")
+    }
+
+    # Identify NAP-managed VMSS and check subnet coverage
+    pool_names = {pool.get("name", "") for pool in agent_pools if pool.get("name")}
+    nap_vmss_names, unanalyzed_subnets = _classify_nap_vmss(
+        vmss_analysis, pool_names, analyzed_subnet_ids
+    )
+
+    if nap_vmss_names:
+        nap_finding["details"]["nap_vmss"] = nap_vmss_names
+        logger.info(
+            "  Found %d NAP-managed VMSS: %s",
+            len(nap_vmss_names), ", ".join(nap_vmss_names)
+        )
+
+    if unanalyzed_subnets:
+        subnet_names = [s.split("/")[-1] for s in unanalyzed_subnets]
+        nap_findings.append({
+            "severity": "warning",
+            "code": "NAP_SUBNET_NOT_ANALYZED",
+            "message": (
+                f"NAP-provisioned nodes are using {len(unanalyzed_subnets)} subnet(s) "
+                f"not covered by this diagnostic analysis: {', '.join(subnet_names)}"
+            ),
+            "recommendation": (
+                "NAP nodes (via AKSNodeClass) are using subnets that were not analyzed "
+                "by this diagnostic tool. NSG rules, route tables, and DNS configuration "
+                "for these subnets have not been validated. Manually verify network "
+                "configuration for these subnets."
+            ),
+            "details": {
+                "unanalyzed_subnet_ids": list(unanalyzed_subnets),
+                "nap_vmss": nap_vmss_names,
+            }
+        })
+        logger.warning(
+            "  WARNING: %d NAP VMSS subnet(s) not covered by analysis: %s",
+            len(unanalyzed_subnets), ", ".join(subnet_names)
+        )
+
+    return nap_findings
+
+
+def _classify_nap_vmss(
+    vmss_analysis: List[Dict[str, Any]],
+    pool_names: set,
+    analyzed_subnet_ids: set
+) -> tuple:
+    """
+    Classify VMSS as NAP-managed and identify unanalyzed subnets.
+
+    Returns:
+        Tuple of (nap_vmss_names, unanalyzed_subnets)
+    """
+    nap_vmss_names = []
+    unanalyzed_subnets = set()
+
+    for vmss in vmss_analysis:
+        vmss_name = vmss.get("name", "")
+        if not vmss_name:
+            continue
+
+        tags = vmss.get("tags") or {}
+        is_karpenter = any(
+            k.startswith("karpenter.sh/") or k.startswith("karpenter.azure.com/")
+            for k in tags
+        )
+        matches_pool = any(pool_name in vmss_name for pool_name in pool_names)
+
+        if is_karpenter or not matches_pool:
+            nap_vmss_names.append(vmss_name)
+
+            # Extract subnets from this VMSS and check coverage
+            nics = vmss.get("virtual_machine_profile", {}).get(
+                "network_profile", {}
+            ).get("network_interface_configurations", [])
+            for nic in nics:
+                for ip_config in nic.get("ip_configurations", []):
+                    subnet_id = ip_config.get("subnet", {}).get("id", "")
+                    if subnet_id and subnet_id.lower() not in analyzed_subnet_ids:
+                        unanalyzed_subnets.add(subnet_id)
+
+    return nap_vmss_names, unanalyzed_subnets
+
+
 def run_diagnostics(  # pylint: disable=too-many-locals
     aks_client,
     agent_pools_client,
@@ -385,6 +524,13 @@ def run_diagnostics(  # pylint: disable=too-many-locals
 
     # Now analyze VNets with enriched agent pool data
     vnets_analysis = collector.collect_vnet_info(agent_pools)
+
+    # Check for NAP (Node Auto-Provisioning)
+    nap_findings: List[Dict[str, Any]] = []
+    if cluster_info.get("nap_enabled"):
+        nap_findings = _analyze_nap(
+            cluster_info, agent_pools, vmss_analysis, vnets_analysis, logger
+        )
 
     # Check if we have permission issues that might affect subsequent analysis
     has_vmss_permission_issues = any(
@@ -542,6 +688,10 @@ def run_diagnostics(  # pylint: disable=too-many-locals
         if non_perm_findings:
             logger.debug("Collecting %d non-permission findings from outbound analyzer", len(non_perm_findings))
             findings.extend(non_perm_findings)
+
+    # Add NAP findings
+    if nap_findings:
+        findings.extend(nap_findings)
 
     # Phase 10: Generate report
     logger.info("Generating diagnostic report...")

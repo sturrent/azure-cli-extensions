@@ -184,6 +184,11 @@ class ClusterDataCollector:
                 f"Please check the cluster name and resource group."
             )
 
+        # Extract NAP (Node Auto-Provisioning) status
+        nap_profile = cluster_result.get("node_provisioning_profile") or {}
+        nap_mode = nap_profile.get("mode", "Manual")
+        cluster_result["nap_enabled"] = (nap_mode == "Auto")
+
         # Get agent pools from cluster's agent_pool_profiles
         # This provides the correct 'type' field (VirtualMachines vs VirtualMachineScaleSets)
         # as opposed to agent_pools_client.list() which returns ARM resource type
