@@ -159,7 +159,7 @@ class OutboundConnectivityAnalyzer:
             )
 
         # Check subnet defaultOutboundAccess settings
-        self._check_default_outbound_access(outbound_type)
+        self._check_default_outbound_access()
 
         # Check HTTP proxy configuration
         http_proxy_config = self._check_http_proxy_config()
@@ -521,7 +521,7 @@ class OutboundConnectivityAnalyzer:
         except Exception:  # pylint: disable=broad-except
             return []
 
-    def _check_default_outbound_access(self, outbound_type: str) -> None:
+    def _check_default_outbound_access(self) -> None:
         """
         Check subnet defaultOutboundAccess settings and report
         private subnet status.
@@ -874,9 +874,6 @@ class OutboundConnectivityAnalyzer:
                                 self.logger.info("      Public IP Prefix: %s", ip_prefix)
                             # Extract first IP from prefix for outbound IP tracking
                             try:
-                                import ipaddress  # pylint: disable=import-outside-toplevel
-
-                                # Validate the prefix
                                 ipaddress.ip_network(ip_prefix, strict=False)
                                 self.outbound_ips.append(f"{ip_prefix} (range)")
                             except Exception:  # pylint: disable=broad-except
@@ -1002,7 +999,6 @@ class OutboundConnectivityAnalyzer:
                 self.logger.info("      Public IP Prefix: %s", ip_prefix)
             # Validate and add the prefix
             try:
-                import ipaddress  # pylint: disable=import-outside-toplevel
                 ipaddress.ip_network(ip_prefix, strict=False)
                 self.outbound_ips.append(f"{ip_prefix} (range)")
             except Exception:  # pylint: disable=broad-except

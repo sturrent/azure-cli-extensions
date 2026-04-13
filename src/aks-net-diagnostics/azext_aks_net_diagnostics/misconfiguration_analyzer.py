@@ -412,38 +412,17 @@ class MisconfigurationAnalyzer:  # pylint: disable=too-few-public-methods
         acr_fqdn = f"{acr_name}.azurecr.io"
 
         # Determine cluster VNet IDs (BYO or managed VNet)
-        cluster_vnet_ids = self._get_cluster_vnet_ids(cluster_info)
-        if not cluster_vnet_ids:
-            # Managed VNet: list VNets in MC_ resource group
-            mc_rg = cluster_info.get("node_resource_group", "")
-            if mc_rg:
-                try:
-                    vnets = list(self.network_client.virtual_networks.list(mc_rg))
-                    cluster_vnet_ids = [v.id for v in vnets if v.id]
-                except (ResourceNotFoundError, HttpResponseError):
-                    pass
-
+        cluster_vnet_ids = self._resolve_cluster_vnet_ids(cluster_info)
         if not cluster_vnet_ids:
             self.logger.debug("Cannot determine cluster VNet IDs for ACR DNS check")
             return
 
-        # Determine which privatedns client(s) to use
+        # Get DNS client for ACR's subscription
         cluster_subscription = self.clients.get("subscription_id", "")
         is_cross_sub = acr_subscription.lower() != cluster_subscription.lower()
-
-        # Build DNS client for ACR's subscription (may differ from cluster sub)
-        acr_dns_client = self.privatedns_client  # same-sub default
-        if is_cross_sub and self.credential:
-            try:
-                from azure.mgmt.privatedns import PrivateDnsManagementClient  # pylint: disable=import-outside-toplevel
-                acr_dns_client = PrivateDnsManagementClient(
-                    self.credential, subscription_id=acr_subscription
-                )
-            except Exception:  # pylint: disable=broad-except
-                acr_dns_client = None
+        acr_dns_client = self._get_acr_dns_client(acr_subscription, is_cross_sub)
 
         if not acr_dns_client:
-            # Cross-sub and no credential — emit informational finding
             findings.append({
                 "severity": "info",
                 "code": "BOOTSTRAP_ACR_DNS_NOT_LINKED",
@@ -460,15 +439,54 @@ class MisconfigurationAnalyzer:  # pylint: disable=too-few-public-methods
             })
             return
 
-        # Search for the zone in targeted resource groups first.
-        # The zone is most likely in the ACR's RG (BYO) or the MC_ RG (managed).
-        zone_name = "privatelink.azurecr.io"
-        mc_rg = cluster_info.get("node_resource_group", "")
+        # Search for the zone and VNet link
+        candidate_rgs = self._build_candidate_rgs(acr_rg, cluster_info)
+        zone_found, vnet_linked = self._find_acr_dns_zone_link(
+            acr_dns_client, candidate_rgs, cluster_vnet_ids, is_cross_sub
+        )
 
+        # Generate findings
+        self._emit_acr_dns_findings(
+            findings, zone_found, vnet_linked,
+            acr_name, acr_fqdn, outbound_type, cluster_vnet_ids
+        )
+
+    def _resolve_cluster_vnet_ids(self, cluster_info: Dict[str, Any]) -> List[str]:
+        """Get cluster VNet IDs from agent pools or MC_ resource group."""
+        cluster_vnet_ids = self._get_cluster_vnet_ids(cluster_info)
+        if not cluster_vnet_ids:
+            mc_rg = cluster_info.get("node_resource_group", "")
+            if mc_rg:
+                try:
+                    vnets = list(self.network_client.virtual_networks.list(mc_rg))
+                    cluster_vnet_ids = [v.id for v in vnets if v.id]
+                except (ResourceNotFoundError, HttpResponseError):
+                    pass
+        return cluster_vnet_ids
+
+    def _get_acr_dns_client(self, acr_subscription: str, is_cross_sub: bool):
+        """Get the private DNS client for the ACR's subscription."""
+        if not is_cross_sub:
+            return self.privatedns_client
+
+        if not self.credential:
+            return None
+
+        try:
+            from azure.mgmt.privatedns import PrivateDnsManagementClient  # pylint: disable=import-outside-toplevel
+            return PrivateDnsManagementClient(
+                self.credential, subscription_id=acr_subscription
+            )
+        except Exception:  # pylint: disable=broad-except
+            return None
+
+    @staticmethod
+    def _build_candidate_rgs(acr_rg: str, cluster_info: Dict[str, Any]) -> List[str]:
+        """Build list of resource groups to search for the private DNS zone."""
         candidate_rgs = [acr_rg]
+        mc_rg = cluster_info.get("node_resource_group", "")
         if mc_rg and mc_rg.lower() != acr_rg.lower():
             candidate_rgs.append(mc_rg)
-        # Also try the cluster's own resource group
         cluster_id = cluster_info.get("id", "")
         if cluster_id:
             cid_parts = cluster_id.split("/")
@@ -476,81 +494,109 @@ class MisconfigurationAnalyzer:  # pylint: disable=too-few-public-methods
                 cluster_rg = cid_parts[4]
                 if cluster_rg.lower() not in [rg.lower() for rg in candidate_rgs]:
                     candidate_rgs.append(cluster_rg)
+        return candidate_rgs
 
+    def _check_zone_vnet_links(self, dns_client, rg, zone_name, cluster_vnet_ids):
+        """Check if a private DNS zone exists in a RG and is linked to cluster VNets.
+
+        Returns:
+            Tuple of (zone_found: bool, vnet_linked: bool)
+        """
+        try:
+            dns_client.private_zones.get(rg, zone_name)
+        except (ResourceNotFoundError, HttpResponseError):
+            return False, False
+        except Exception:  # pylint: disable=broad-except
+            return False, False
+
+        try:
+            links = list(dns_client.virtual_network_links.list(rg, zone_name))
+            linked_ids = {
+                lnk.virtual_network.id.lower()
+                for lnk in links
+                if lnk.virtual_network and lnk.virtual_network.id
+            }
+            for cvid in cluster_vnet_ids:
+                if cvid.lower() in linked_ids:
+                    return True, True
+            return True, False
+        except (ResourceNotFoundError, HttpResponseError):
+            return True, False
+        except Exception:  # pylint: disable=broad-except
+            return True, False
+
+    def _find_acr_dns_zone_link(self, acr_dns_client, candidate_rgs,
+                                cluster_vnet_ids, is_cross_sub):
+        """Search for privatelink.azurecr.io zone and check VNet link.
+
+        Searches candidate RGs first, then falls back to subscription-wide scan.
+
+        Returns:
+            Tuple of (zone_found: bool, vnet_linked: bool)
+        """
+        zone_name = "privatelink.azurecr.io"
         zone_found = False
         vnet_linked = False
 
-        # Helper: check VNet links for a zone in a given RG
-        def _check_zone_links(dns_client, rg):
-            try:
-                dns_client.private_zones.get(rg, zone_name)
-            except (ResourceNotFoundError, HttpResponseError):
-                return False, False
-            except Exception:  # pylint: disable=broad-except
-                return False, False
-
-            # Zone exists in this RG — check VNet links
-            try:
-                links = list(dns_client.virtual_network_links.list(rg, zone_name))
-                linked_ids = {
-                    lnk.virtual_network.id.lower()
-                    for lnk in links
-                    if lnk.virtual_network and lnk.virtual_network.id
-                }
-                for cvid in cluster_vnet_ids:
-                    if cvid.lower() in linked_ids:
-                        return True, True
-                return True, False  # zone found, but VNet not linked
-            except (ResourceNotFoundError, HttpResponseError):
-                return True, False
-            except Exception:  # pylint: disable=broad-except
-                return True, False
-
         # 1. Targeted search in candidate RGs (ACR sub)
         for rg in candidate_rgs:
-            found, linked = _check_zone_links(acr_dns_client, rg)
-            if found:
-                zone_found = True
+            found, linked = self._check_zone_vnet_links(
+                acr_dns_client, rg, zone_name, cluster_vnet_ids
+            )
+            zone_found = zone_found or found
             if linked:
-                vnet_linked = True
-                break
+                return zone_found, True
 
-        # 2. If ACR is cross-sub and zone not found there, also check cluster sub
+        # 2. Cross-sub: also check cluster subscription's candidate RGs
         if not zone_found and is_cross_sub:
             for rg in candidate_rgs:
-                found, linked = _check_zone_links(self.privatedns_client, rg)
-                if found:
-                    zone_found = True
+                found, linked = self._check_zone_vnet_links(
+                    self.privatedns_client, rg, zone_name, cluster_vnet_ids
+                )
+                zone_found = zone_found or found
                 if linked:
-                    vnet_linked = True
-                    break
+                    return zone_found, True
 
-        # 3. Subscription-wide fallback if targeted search found nothing.
-        #    Match VNet links for *this cluster's* VNet only.
+        # 3. Subscription-wide fallback
         if not vnet_linked:
-            for dns_client in ([acr_dns_client] if not is_cross_sub
-                               else [acr_dns_client, self.privatedns_client]):
-                try:
-                    all_zones = list(dns_client.private_zones.list())
-                    for z in all_zones:
-                        if z.name != zone_name:
-                            continue
-                        zone_found = True
-                        z_rg = self._parse_resource_id(z.id).get("resource_group", "")
-                        if not z_rg:
-                            continue
-                        _, linked = _check_zone_links(dns_client, z_rg)
-                        if linked:
-                            vnet_linked = True
-                            break
-                except (ResourceNotFoundError, HttpResponseError):
-                    continue
-                except Exception:  # pylint: disable=broad-except
-                    continue
-                if vnet_linked:
-                    break
+            dns_clients = ([acr_dns_client] if not is_cross_sub
+                           else [acr_dns_client, self.privatedns_client])
+            zone_found, vnet_linked = self._zone_search_fallback(
+                dns_clients, zone_name, cluster_vnet_ids, zone_found
+            )
 
-        # Generate findings
+        return zone_found, vnet_linked
+
+    def _zone_search_fallback(self, dns_clients, zone_name,
+                              cluster_vnet_ids, zone_found):
+        """Subscription-wide fallback search for the private DNS zone."""
+        vnet_linked = False
+        for dns_client in dns_clients:
+            try:
+                all_zones = list(dns_client.private_zones.list())
+                for z in all_zones:
+                    if z.name != zone_name:
+                        continue
+                    zone_found = True
+                    z_rg = self._parse_resource_id(z.id).get("resource_group", "")
+                    if not z_rg:
+                        continue
+                    _, linked = self._check_zone_vnet_links(
+                        dns_client, z_rg, zone_name, cluster_vnet_ids
+                    )
+                    if linked:
+                        return zone_found, True
+            except (ResourceNotFoundError, HttpResponseError):
+                continue
+            except Exception:  # pylint: disable=broad-except
+                continue
+        return zone_found, vnet_linked
+
+    @staticmethod
+    def _emit_acr_dns_findings(findings, zone_found, vnet_linked,
+                               acr_name, acr_fqdn, outbound_type, cluster_vnet_ids):
+        """Generate findings for bootstrap ACR DNS zone check."""
+        zone_name = "privatelink.azurecr.io"
         cluster_vnet_names = [vid.split("/")[-1] for vid in cluster_vnet_ids]
 
         if not zone_found:
@@ -1268,10 +1314,6 @@ class MisconfigurationAnalyzer:  # pylint: disable=too-few-public-methods
                 "recommendation": recommendation
             })
 
-        authorized_ranges = api_server_access_analysis.get(
-            "authorized_ip_ranges",
-            []
-        )
         access_restrictions = api_server_access_analysis.get(
             "access_restrictions",
             {}
