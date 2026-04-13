@@ -5,12 +5,12 @@ author: sturrent
 ms.author: sturrent
 ms.topic: how-to
 ms.custom: devx-track-azurecli
-ms.date: 12/15/2025
+ms.date: 04/13/2026
 ---
 
 Network configuration issues are among the most common causes of problems in Azure Kubernetes Service (AKS) clusters. The `aks-net-diagnostics` Azure CLI extension provides comprehensive, read-only analysis of your AKS cluster's network configuration to help you identify and resolve connectivity issues quickly.
 
-This article shows you how to install and use the AKS network diagnostics extension to analyze DNS configuration, outbound connectivity, network security groups (NSGs), routing, and Private Link resources.
+This article shows you how to install and use the AKS network diagnostics extension to analyze DNS configuration, outbound connectivity, network security groups (NSGs), routing, API server access, and private DNS resources. The extension supports standard, private, network-isolated, and proxy-configured clusters.
 
 > [!IMPORTANT]
 > The `aks-net-diagnostics` extension is currently in **preview**. Features and commands may change in future releases. See the [Supplemental Terms of Use for Microsoft Azure Previews](https://azure.microsoft.com/support/legal/preview-supplemental-terms/) for legal terms that apply to Azure features that are in beta, preview, or otherwise not yet released into general availability.
@@ -21,7 +21,7 @@ The AKS network diagnostics extension performs read-only analysis of your cluste
 
 ### Scope
 
-This tool primarily focuses on **egress (north-south) connectivity**—traffic flowing from your cluster to external resources such as Azure services, container registries, and the internet. It validates the Azure infrastructure components that enable outbound communication from your AKS cluster.
+This tool primarily focuses on **egress (north-south) connectivity**—traffic flowing from your cluster to external resources such as Azure services, container registries, and the internet. It validates the Azure infrastructure components that enable outbound communication from your AKS cluster, including network-isolated clusters (outbound type `none` or `block`) and clusters configured with an HTTP proxy.
 
 For **internal cluster (east-west) connectivity** issues between pods or services, this tool provides limited coverage through NSG rule analysis and DNS configuration checks. Pod-to-pod networking issues typically require in-cluster troubleshooting using tools like `kubectl`, network policies inspection, or CNI-specific diagnostics.
 
@@ -29,12 +29,15 @@ The extension analyzes the following areas:
 
 | Diagnostic category | Description |
 |---------------------|-------------|
-| **DNS resolution** | Validates VNET DNS configuration and private DNS zones (when configured for private clusters) |
-| **Outbound connectivity** | Tests cluster internet egress and validates connectivity to required Azure endpoints |
-| **Network Security Groups (NSGs)** | Checks NSG rules affecting cluster communication and validates required rules |
-| **Routes and routing** | Analyzes route tables and custom routing configurations |
-| **Private DNS zones** | Validates private DNS zone configuration for private clusters |
-| **Private Link** | Examines Private Link and Private Endpoint configurations |
+| **DNS resolution** | Validates VNet DNS configuration and private DNS zones (including bootstrap ACR DNS for network-isolated clusters) |
+| **Outbound connectivity** | Analyzes outbound type (load balancer, NAT gateway, UDR, `none`, `block`), bootstrap ACR, HTTP proxy configuration, and `defaultOutboundAccess` |
+| **Network Security Groups (NSGs)** | Checks NSG rules for required AKS traffic (MCR, AzureCloud, DNS), proxy traffic rules, inter-node communication, service tag semantics, and Azure CNI Overlay pod CIDR rules |
+| **Routes and routing** | Analyzes route tables and UDR impact on outbound traffic (firewall/NVA, VPN gateway) |
+| **API server access** | Validates authorized IP ranges, service tag usage, private cluster and VNet integration configuration |
+| **Private DNS zones** | Validates private DNS zone configuration and VNet links for private clusters |
+| **Active connectivity tests** | Optional probe tests: DNS resolution and HTTPS connectivity to MCR, bootstrap ACR, API server, and HTTP proxy from cluster nodes (VMSS and VM node pools) |
+| **Cross-component correlation** | Detects composite issues: cluster/node pool provisioning failures, bootstrap ACR DNS link gaps, NSG + outbound + DNS interactions |
+| **Node Auto Provisioning (NAP)** | Identifies NAP-enabled clusters and detects Karpenter-managed VMs and VMSS |
 
 ## Prerequisites
 
@@ -66,6 +69,7 @@ The diagnostic tool runs using your Azure CLI credentials and requires specific 
 | Permission | Description |
 |------------|-------------|
 | `Microsoft.Compute/virtualMachineScaleSets/virtualmachines/runCommand/action` | Run commands on VMSS instances (node pools) |
+| `Microsoft.Compute/virtualMachines/runCommand/action` | Run commands on VM-based node pools (VirtualMachines type) |
 
 > [!NOTE]
 > The `--probe-test` option requires **Virtual Machine Contributor** permissions on the cluster's node resource group (typically named `MC_<resource-group>_<cluster-name>_<location>`). Without this permission, the probe tests will be skipped.
@@ -122,7 +126,7 @@ az aks net-diagnostics --resource-group <resource-group-name> --name <cluster-na
 ```
 
 > [!NOTE]
-> The `--probe-test` option runs active connectivity tests from cluster nodes to validate DNS resolution and outbound connectivity to required endpoints. This requires **Virtual Machine Contributor** permissions on the cluster's node resource group.
+> The `--probe-test` option runs active connectivity tests from cluster nodes (both VMSS and VM-based node pools) to validate DNS resolution and outbound connectivity to required endpoints. For network-isolated clusters, tests target the bootstrap ACR instead of MCR. For proxy-configured clusters, proxy connectivity is also tested. This requires **Virtual Machine Contributor** permissions on the cluster's node resource group.
 
 ### Save results to a JSON file
 
@@ -153,7 +157,6 @@ The diagnostic tool provides results with the following severity levels:
 |----------|-------------|
 | **INFO** | Informational findings about your cluster configuration |
 | **WARNING** | Potential issues that may need attention |
-| **ERROR** | Configuration problems that could impact cluster functionality |
 | **CRITICAL** | Severe misconfigurations requiring immediate action |
 
 Each finding includes:
@@ -165,59 +168,76 @@ Each finding includes:
 
 ## Diagnostic categories
 
-### DNS Analyzer
+### DNS analyzer
 
 The DNS analyzer checks:
 
-- VNET DNS server configuration
-- Private DNS zone validation (for private clusters)
-- DNS record verification
-- Zone link analysis
+- VNet DNS server configuration (Azure default vs custom DNS)
+- Private DNS zone validation for private clusters
+- VNet link verification (including cross-subscription BYO DNS zones)
+- DNS server VNet hosting and reachability
 
 ### Outbound connectivity analyzer
 
 The outbound connectivity analyzer validates:
 
-- Internet egress configuration
-- Connectivity to required Azure endpoints
-- Proxy configuration analysis
-- NAT gateway configuration
+- Outbound type: `loadBalancer`, `managedNATGateway`, `userAssignedNATGateway`, `userDefinedRouting`, `none`, `block`
+- Load balancer frontend IPs, NAT gateway public IPs, and outbound rules
+- Network-isolated clusters (`none`/`block`): bootstrap ACR presence and configuration
+- HTTP proxy: detection, VNet reachability via peering, proxy IP/port extraction
+- `defaultOutboundAccess` subnet-level awareness
+- UDR impact on outbound traffic path
 
 ### Network Security Group (NSG) analyzer
 
 The NSG analyzer examines:
 
-- NSG rules affecting AKS cluster communication
-- Required rule validation
-- Rule priority analysis
-- Security recommendations
+- Required AKS outbound rules (MCR, AzureCloud, DNS) with adapted rule sets for network-isolated clusters
+- HTTP proxy NSG compliance (`AKS_HTTP_Proxy` rule, proxy traffic blocking detection)
+- Inter-node communication rules
+- Blocking rules and override detection
+- Service tag semantics
+- Azure CNI Overlay pod CIDR traffic rules
+- NSGs on subnets and individual NICs
 
-### Routes analyzer
+### Route table analyzer
 
-The routes analyzer checks:
+The route table analyzer checks:
 
-- Route table configuration
-- Custom routes analysis
-- System routes validation
-- Next hop verification
+- Default route (0.0.0.0/0) presence and next-hop type
+- Routes to `VirtualAppliance` (firewall/NVA) or `VirtualNetworkGateway`
+- Impact on AKS management and outbound traffic
 
-### Private DNS analyzer
+### API server access analyzer
 
-The private DNS analyzer (for private clusters) validates:
+The API server access analyzer validates:
 
-- Private DNS zone configuration
-- A-record validation
-- Zone link verification
-- VNET integration checks
+- Public vs private cluster setup
+- VNet integration detection
+- Authorized IP ranges (CIDRs and service tags), validating cluster outbound IPs are included
+- Service tag detection, multiple-tag warnings, VNet Integration compatibility
+- UDR override detection (firewall/NVA may change the source IP)
 
-### Private Link analyzer
+### Active connectivity tester
 
-The Private Link analyzer examines:
+The connectivity tester runs active probe tests (only with `--probe-test`):
 
-- Private endpoint status
-- Private link service configuration
-- Connection state validation
-- Network interface analysis
+- MCR DNS resolution and HTTPS connectivity (standard clusters)
+- Bootstrap ACR DNS and HTTPS connectivity (network-isolated clusters)
+- API server DNS resolution and HTTPS connectivity (all clusters)
+- HTTP proxy connectivity (proxy-configured clusters)
+- Supports both VMSS and standalone VM node pools (VirtualMachines type)
+
+### Misconfiguration analyzer
+
+The misconfiguration analyzer performs cross-component correlation:
+
+- Cluster provisioning failures and cluster stopped state
+- Node pool provisioning failures
+- Bootstrap ACR private DNS (`privatelink.azurecr.io`) VNet link validation
+- Connectivity test result correlation
+- DNS misconfiguration patterns (system-managed, BYO, cross-subscription)
+- Permission context (prevents false positives when data is incomplete)
 
 ## Troubleshooting
 
