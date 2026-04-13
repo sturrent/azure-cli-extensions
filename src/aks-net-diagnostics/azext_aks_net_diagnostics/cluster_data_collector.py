@@ -420,6 +420,7 @@ class ClusterDataCollector:
 
         For node pools using Virtual Machines (not VMSS), this method collects
         individual VM details including network interfaces and configurations.
+        Also collects Karpenter-provisioned VMs when NAP is enabled.
 
         Args:
             cluster_info: Cluster configuration dictionary
@@ -428,13 +429,14 @@ class ClusterDataCollector:
         Returns:
             List of VM details with network profiles
         """
-        # Check if any agent pools use Virtual Machines
+        # Check if any agent pools use Virtual Machines or NAP is enabled
         has_vm_pools = any(
             pool.get("type") == "VirtualMachines" for pool in agent_pools
         )
+        nap_enabled = cluster_info.get("nap_enabled", False)
 
-        if not has_vm_pools:
-            # No VM pools, skip silently
+        if not has_vm_pools and not nap_enabled:
+            # No VM pools and no NAP, skip silently
             return []
 
         self.logger.info("Collecting node network configuration (VMs)...")

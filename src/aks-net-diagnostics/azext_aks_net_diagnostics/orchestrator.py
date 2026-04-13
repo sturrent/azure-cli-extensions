@@ -275,21 +275,24 @@ def _analyze_nap(
     cluster_info: Dict[str, Any],
     agent_pools: List[Dict[str, Any]],
     vmss_analysis: List[Dict[str, Any]],
+    vm_analysis: List[Dict[str, Any]],
     vnets_analysis: List[Dict[str, Any]],
     logger: logging.Logger
 ) -> List[Dict[str, Any]]:
     """
     Analyze Node Auto-Provisioning (NAP/Karpenter) status and subnet coverage.
 
-    NAP uses Karpenter to dynamically provision nodes. Nodes may use subnets
-    specified in AKSNodeClass CRDs, which can differ from traditional node pool
-    subnets. This function detects NAP and checks whether all NAP VMSS subnets
-    are covered by the extension's VNet analysis.
+    NAP uses Karpenter to dynamically provision nodes. Karpenter creates
+    standalone VMs (not VMSS) with karpenter-specific tags. Nodes may use
+    subnets specified in AKSNodeClass CRDs, which can differ from traditional
+    node pool subnets. This function detects NAP nodes and checks whether
+    all NAP subnets are covered by the extension's VNet analysis.
 
     Args:
         cluster_info: Cluster configuration dictionary
         agent_pools: List of agent pool configurations
         vmss_analysis: List of VMSS analysis data
+        vm_analysis: List of VM analysis data with NIC details
         vnets_analysis: List of VNet analysis results
         logger: Logger instance
 
@@ -333,11 +336,20 @@ def _analyze_nap(
         vmss_analysis, pool_names, analyzed_subnet_ids
     )
 
-    if nap_vmss_names:
-        nap_finding["details"]["nap_vmss"] = nap_vmss_names
+    # Identify NAP-managed standalone VMs (Karpenter creates VMs, not VMSS)
+    nap_vm_names, nap_vm_unanalyzed = _classify_nap_vms(
+        vm_analysis, analyzed_subnet_ids
+    )
+
+    # Merge results
+    nap_node_names = nap_vmss_names + nap_vm_names
+    unanalyzed_subnets = unanalyzed_subnets | nap_vm_unanalyzed
+
+    if nap_node_names:
+        nap_finding["details"]["nap_nodes"] = nap_node_names
         logger.info(
-            "  Found %d NAP-managed VMSS: %s",
-            len(nap_vmss_names), ", ".join(nap_vmss_names)
+            "  Found %d NAP-managed node(s): %s",
+            len(nap_node_names), ", ".join(nap_node_names)
         )
 
     if unanalyzed_subnets:
@@ -357,11 +369,11 @@ def _analyze_nap(
             ),
             "details": {
                 "unanalyzed_subnet_ids": list(unanalyzed_subnets),
-                "nap_vmss": nap_vmss_names,
+                "nap_nodes": nap_node_names,
             }
         })
         logger.warning(
-            "  WARNING: %d NAP VMSS subnet(s) not covered by analysis: %s",
+            "  WARNING: %d NAP node subnet(s) not covered by analysis: %s",
             len(unanalyzed_subnets), ", ".join(subnet_names)
         )
 
@@ -408,6 +420,52 @@ def _classify_nap_vmss(
                         unanalyzed_subnets.add(subnet_id)
 
     return nap_vmss_names, unanalyzed_subnets
+
+
+def _classify_nap_vms(
+    vm_analysis: List[Dict[str, Any]],
+    analyzed_subnet_ids: set
+) -> tuple:
+    """
+    Classify standalone VMs as NAP-managed and identify unanalyzed subnets.
+
+    Karpenter provisions standalone VMs (not VMSS) with tags like
+    'karpenter.sh_nodepool' and 'karpenter.azure.com_managed-by'.
+    Note: Azure tags use underscores instead of slashes in key names.
+
+    Returns:
+        Tuple of (nap_vm_names, unanalyzed_subnets)
+    """
+    nap_vm_names = []
+    unanalyzed_subnets = set()
+
+    for vm in vm_analysis:
+        vm_name = vm.get("name", "")
+        if not vm_name:
+            continue
+
+        tags = vm.get("tags") or {}
+        # Karpenter VM tags use underscores: karpenter.sh_nodepool,
+        # karpenter.azure.com_managed-by, karpenter.azure.com_cluster
+        is_karpenter = any(
+            k.startswith("karpenter.sh_") or k.startswith("karpenter.azure.com_")
+            for k in tags
+        )
+
+        if not is_karpenter:
+            continue
+
+        nap_vm_names.append(vm_name)
+
+        # Extract subnets from VM NIC details
+        for nic in vm.get("nic_details", []):
+            for ip_config in nic.get("ip_configurations", []):
+                subnet = ip_config.get("subnet") or {}
+                subnet_id = subnet.get("id", "")
+                if subnet_id and subnet_id.lower() not in analyzed_subnet_ids:
+                    unanalyzed_subnets.add(subnet_id)
+
+    return nap_vm_names, unanalyzed_subnets
 
 
 def run_diagnostics(  # pylint: disable=too-many-locals
@@ -529,7 +587,8 @@ def run_diagnostics(  # pylint: disable=too-many-locals
     nap_findings: List[Dict[str, Any]] = []
     if cluster_info.get("nap_enabled"):
         nap_findings = _analyze_nap(
-            cluster_info, agent_pools, vmss_analysis, vnets_analysis, logger
+            cluster_info, agent_pools, vmss_analysis, vm_analysis,
+            vnets_analysis, logger
         )
 
     # Check if we have permission issues that might affect subsequent analysis

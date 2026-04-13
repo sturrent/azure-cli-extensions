@@ -1206,25 +1206,25 @@ class ReportGenerator:  # pylint: disable=too-many-instance-attributes
             nsg_groups = {}
             for nsg in nic_nsgs:
                 nsg_name = nsg.get("nsg_name", "unknown")
-                vmss_name = nsg.get("vmss_name", "unknown")
+                node_name = nsg.get("vmss_name") or nsg.get("vm_name", "unknown")
 
                 if nsg_name not in nsg_groups:
                     nsg_groups[nsg_name] = {
                         "nsg_data": nsg,
-                        "vmss_list": []
+                        "node_list": []
                     }
-                nsg_groups[nsg_name]["vmss_list"].append(vmss_name)
+                nsg_groups[nsg_name]["node_list"].append(node_name)
 
-            # Display each unique NSG with its associated VMSS instances
+            # Display each unique NSG with its associated node instances
             for nsg_name, group_data in nsg_groups.items():
                 nsg = group_data["nsg_data"]
-                vmss_list = group_data["vmss_list"]
+                node_list = group_data["node_list"]
                 custom_rules = len(nsg.get("rules", []))
                 default_rules = len(nsg.get("default_rules", []))
 
-                # Show NSG with all VMSS instances using it
-                vmss_names = ", ".join(vmss_list)
-                print(f"- **{nsg_name}** (used by: {vmss_names})")
+                # Show NSG with all node instances using it
+                node_names = ", ".join(node_list)
+                print(f"- **{nsg_name}** (used by: {node_names})")
                 print(
                     f"  - Custom Rules: {custom_rules}, "
                     f"Default Rules: {default_rules}"

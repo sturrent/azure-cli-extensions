@@ -14,19 +14,22 @@
 | WI-1: Outbound none/block | **Done** | `876816c`, `dc30e91` | Managed (block) + BYO (none) |
 | WI-2: HTTP proxy awareness | **Done** | `bd89d64`, `0c225e3` | Proxy cluster (3 breakage scenarios) |
 | WI-3: Service tags | **Done** | `124677a` | Service tag cluster (single + multi) |
-| WI-4: NAP detection | Not started | -- | -- |
+| WI-4: NAP detection | **Done** | `29b2092`, `fdc3923` | NAP managed + BYO VNet + NSG breakage |
 | Enhancement: Probe tests for network isolation | **Done** | `6262ae2` | Managed (block) + BYO (none) |
 | Enhancement: NSG analyzer for network isolation | **Done** | `6a7e416` | Managed (block) + BYO (none) |
 | Enhancement: Bootstrap ACR private DNS VNet link | **Done** | `f27f056` | Managed (block) + BYO (none) |
 | Enhancement: Suppress noisy CLI findings | **Done** | `11a2f65` | Managed (block) + BYO (none) |
 | Enhancement: Proxy diagnostics (VNet, NSG, probes) | **Done** | `0c225e3` | Proxy cluster (3 breakage scenarios) |
 | Doc updates | **Done** | `1c32e53`, `cceca6c` | -- |
+| Style fixes + refactor | **Done** | `dfc99c7` | -- |
 
 **Test clusters used:**
 - `aks-wi1-managed` (managed VNet, AKS-managed ACR, outbound: block) in `aks-wi1-test-rg`
 - `aks-wi1-byo` (BYO VNet `wi1-test-vnet`, BYO ACR `akswi1byoacr`, outbound: none) in `aks-wi1-test-rg`
 - `aks-proxy` (HTTP proxy via VNet peering, outbound: loadBalancer) in `aks-proxy-rg` — AKS VNet `aks-proxy-vnet` (10.100.0.0/16) peered to `proxy-svc-vnet` (172.12.0.0/16) in `proxy-svc-rg`, proxy VM at 172.12.0.4:8080
 - `aks-wi3-svc-tag` (service tags in authorized IP ranges, outbound: loadBalancer) in `aks-wi3-test-rg`
+- `aks-wi4-nap` (NAP enabled, Azure CNI Overlay + Cilium, node-provisioning-mode Auto) in `aks-wi4-test-rg` (canadacentral)
+- `aks-nap-byo` (NAP + BYO VNet `nap-test-vnet` 10.200.0.0/16, custom AKSNodeClass with `nap-subnet`, Karpenter VM) in `aks-nap-byo-rg` (canadacentral)
 
 ---
 
@@ -157,45 +160,81 @@ This release closes the high-priority gaps identified in the functionality and g
 
 ---
 
-### WI-4: Node Auto-Provisioning (NAP) Detection
+### WI-4: Node Auto-Provisioning (NAP) Detection — ✅ IMPLEMENTED
 
-**Goal:** Detect NAP-enabled clusters and NAP-provisioned node pools, warn about potential diagnostic gaps.
+**Status:** Implemented (`29b2092`), enhanced with Karpenter VM detection and report fix (`fdc3923`). Live-tested on managed VNet NAP cluster and BYO VNet NAP cluster with NSG breakage scenario.
 
-**Files to modify:**
-- `cluster_data_collector.py` -- NAP detection in cluster/agent pool data
-- `orchestrator.py` -- NAP context in diagnostic workflow
-- `models.py` -- new FindingCode value
+**Goal:** Detect NAP-enabled clusters and NAP-provisioned nodes, warn about potential diagnostic gaps.
 
-**Implementation:**
+**Files modified:**
+- `cluster_data_collector.py` -- NAP detection via `node_provisioning_profile.mode`, VM collection for NAP clusters
+- `orchestrator.py` -- `_analyze_nap()`, `_classify_nap_vmss()`, `_classify_nap_vms()` functions, NAP findings integration
+- `models.py` -- `NAP_ENABLED`, `NAP_SUBNET_NOT_ANALYZED` FindingCode values
+- `report_generator.py` -- Fix NIC NSG "used by" display to show VM names (was showing "unknown")
 
-1. **NAP detection** (`cluster_data_collector.py`, in `collect_cluster_info()` around line 161):
-   - Check cluster properties for NAP enablement: `node_provisioning_profile` or `workload_auto_scaler_profile`
-   - Check agent pools for NAP-created pools (may have specific labels or provisioning mode)
-   - Store NAP status in `cluster_info["nap_enabled"]`
+**Implementation details:**
 
-2. **VMSS discovery enhancement** (`cluster_data_collector.py`, `collect_vmss_info()`):
-   - NAP-provisioned nodes create VMSS in the node resource group
-   - Current VMSS enumeration should already discover them
-   - Add label/tag detection to identify which VMSS are NAP-managed vs traditional
-   - Tag detection: look for Karpenter-related tags on VMSS (e.g., `karpenter.sh/` prefixed tags)
+1. **NAP detection** (`cluster_data_collector.py`, `collect_cluster_info()`):
+   - Reads `node_provisioning_profile` from cluster properties (SDK snake_case key)
+   - `mode == "Auto"` → NAP is enabled; stores `cluster_info["nap_enabled"] = True`
 
-3. **Diagnostic context** (`orchestrator.py`):
-   - In phase 2 (node infrastructure), if NAP is enabled:
-     - Emit INFO finding: "Cluster has Node Auto-Provisioning enabled"
-     - Note that NAP-created nodes use dynamic subnets from AKSNodeClass
-     - Warn if any NAP VMSS use subnets not covered by the extension's analysis
+2. **VM collection for NAP** (`cluster_data_collector.py`, `collect_vm_info()`):
+   - Previously only collected VMs when agent pools had `type: VirtualMachines`
+   - Now also collects VMs when `nap_enabled` is True
+   - **Key discovery:** Karpenter provisions standalone VMs (not VMSS) with tags like `karpenter.sh_nodepool` and `karpenter.azure.com_cluster` (underscores in tag keys, not slashes)
 
-4. **RunCommand limitation note**:
-   - NAP VMSS should support RunCommand (they are standard VMSS)
-   - No special handling needed for connectivity tests
+3. **NAP analysis** (`orchestrator.py`, `_analyze_nap()`):
+   - Emits INFO `NAP_ENABLED` finding with `nap_mode` and `default_node_pools` details
+   - Builds a set of analyzed subnet IDs from VNet analysis
+   - Delegates to `_classify_nap_vmss()` for VMSS-based NAP nodes (future-proofing)
+   - Delegates to `_classify_nap_vms()` for standalone Karpenter VMs:
+     - Identifies VMs with `karpenter.sh_` or `karpenter.azure.com_` tag prefixes
+     - Extracts subnet IDs from VM NIC details
+     - Checks subnet coverage against VNet analysis
+   - Merges VMSS + VM results into unified `nap_nodes` list
+   - If any NAP nodes use subnets not in VNet analysis → WARNING `NAP_SUBNET_NOT_ANALYZED`
 
-5. **New FindingCode** (`models.py`):
-   - `NAP_ENABLED` -- informational, NAP is active on cluster
-   - `NAP_SUBNET_NOT_ANALYZED` -- warning, NAP nodes may use subnets not in primary analysis
+4. **Integration** (`orchestrator.py`, `run_diagnostics()`):
+   - NAP analysis runs after VNet collection (phase 2)
+   - Accepts both `vmss_analysis` and `vm_analysis` parameters
+   - NAP findings appended to the final findings list after outbound analyzer findings
 
-**Testing:**
-- Unit test with NAP-enabled cluster profile, verify INFO finding
-- Unit test with NAP VMSS using different subnet, verify WARNING
+5. **Report fix** (`report_generator.py`, `_print_nic_nsgs()`):
+   - NIC NSG "used by:" display now checks `vm_name` field in addition to `vmss_name`
+   - Karpenter VMs now display their actual name instead of "unknown"
+
+**Test clusters:**
+
+*Managed VNet NAP cluster:*
+- `aks-wi4-nap` (NAP enabled, Azure CNI Overlay + Cilium) in `aks-wi4-test-rg` (canadacentral)
+- `nodeProvisioningProfile: { mode: "Auto", defaultNodePools: "Auto" }`
+- `NAP_ENABLED` INFO finding with proper details
+- All 4 connectivity probe tests pass
+
+*BYO VNet NAP cluster:*
+- `aks-nap-byo` (NAP + BYO VNet) in `aks-nap-byo-rg` (canadacentral)
+- VNet `nap-test-vnet` (10.200.0.0/16) with 3 subnets:
+  - `aks-subnet` (10.200.0.0/24) — system node pool
+  - `nap-subnet` (10.200.1.0/24) — Karpenter nodes via custom AKSNodeClass
+  - `api-server-subnet` (10.200.2.0/28) — delegated for API server
+- Custom AKSNodeClass `nap-custom-subnet` with `vnetSubnetID` pointing to `nap-subnet`
+- Custom NodePool `nap-custom` triggering Karpenter provisioning
+- Karpenter VM `aks-nap-custom-wkc8v` (Standard_D2als_v6) created in `nap-subnet` (IP 10.200.1.4)
+- `NAP_ENABLED` finding correctly shows `nap_nodes: ['aks-nap-custom-wkc8v']`
+- NIC NSG display: `aks-agentpool-nsg (used by: aks-nodepool1-vmss, aks-nap-custom-wkc8v)` — no more "unknown"
+
+*NSG breakage test (on BYO VNet cluster):*
+- Created `nap-subnet-nsg` with `DenyAllOutbound` (priority 100) + `DenyVNetInbound` (priority 200)
+- Attached to `nap-subnet`
+- Diagnostics detected 3 findings:
+  - CRITICAL `NSG_BLOCKING_AKS_TRAFFIC` — DenyAllOutbound blocks management traffic
+  - WARNING `NSG_INTER_NODE_BLOCKED` — DenyVNetInbound blocks inter-node communication
+  - WARNING `NSG_POD_CIDR_BLOCKED` — Rules block Azure CNI Overlay pod traffic
+- Plus INFO `NAP_ENABLED` with the Karpenter VM identified
+
+**New FindingCodes:**
+- `NAP_ENABLED` -- informational, NAP is active on cluster
+- `NAP_SUBNET_NOT_ANALYZED` -- warning, NAP nodes may use subnets not in primary analysis
 
 ---
 
@@ -359,7 +398,7 @@ These gaps are deferred to future releases:
 
 - [x] `az aks net-diagnostics --help` loads successfully
 - [x] `azdev linter aks-net-diagnostics` passes with 0 violations (verified at each commit)
-- [ ] `azdev style aks-net-diagnostics` passes
+- [x] `azdev style aks-net-diagnostics` passes
 - [ ] Unit tests pass for all new FindingCode paths
 - [x] Existing functionality unchanged (verified via live testing against standard clusters)
 - [ ] Version bumped to 0.3.0b1
@@ -370,5 +409,8 @@ These gaps are deferred to future releases:
 - [x] Live-tested: negative test for missing ACR DNS VNet link → CRITICAL detected
 - [x] Live-tested: proxy cluster — working, NSG deny, broken peering (3 breakage scenarios)
 - [x] Live-tested: service tag in authorized IP ranges — single tag, multiple tags
+- [x] Live-tested: NAP managed VNet — NAP_ENABLED detected, probes pass
+- [x] Live-tested: NAP BYO VNet — Karpenter VM detected, NIC NSG mapped correctly
+- [x] Live-tested: NAP BYO VNet + NSG breakage — 3 blocking findings detected on nap-subnet
 - [ ] Push commits to remote
 - [ ] Delete test resource groups (`aks-wi3-test-rg`)
