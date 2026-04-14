@@ -8,6 +8,12 @@ This is a **preview/beta release** for testing and feedback. The extension is fu
 
 ## 🆕 What's New in v0.3.0b1
 
+### SDK 41 Compatibility (Azure CLI 2.85+)
+- Fixed breaking change with `azure-mgmt-containerservice` SDK 41.0.0 (shipped in CLI 2.85.0)
+- SDK 41 changed `as_dict()` output from flat snake_case to camelCase nested under `properties`
+- Added normalization layer to support both SDK 40 (CLI ≤2.83) and SDK 41 (CLI ≥2.85)
+- See [SDK41-COMPAT-ANALYSIS.md](https://github.com/sturrent/azure-cli-extensions/blob/aks-net-diagnostics-v0.3.0/aks-net-diagnostics-integration/SDK41-COMPAT-ANALYSIS.md) for details
+
 ### Network-Isolated Cluster Support (WI-1)
 - Recognize outbound type `none` and `block` for network-isolated clusters
 - Suppress false-positive outbound findings (no LB or NAT gateway expected)
@@ -165,6 +171,7 @@ None. All new findings are additive. Existing JSON output structure is unchanged
 - Preview release — APIs and command structure may change
 - Automated tests not yet implemented (comprehensive live testing completed across 21 scenarios)
 - Probe tests do not specifically target NAP/Karpenter VMs (tests run from the system pool VMSS)
+- The `as_dict()` normalization is a POC workaround; the long-term fix is to refactor to direct SDK attribute access (Approach C in the analysis doc)
 
 ## 📋 Requirements
 

@@ -2,6 +2,19 @@
 
 ## v0.3.0b1 - April 2026
 
+### SDK 41 Compatibility Fix
+
+Azure CLI 2.85.0 ships `azure-mgmt-containerservice` SDK 41.0.0, which changed `as_dict()` to return camelCase keys nested under a `properties` envelope instead of flat snake_case. This broke all dict-based access patterns in the extension.
+
+- Added `_normalize_sdk_dict()` and `_camel_to_snake()` normalization layer in `_to_dict()`
+- Detects SDK 41 format (presence of `properties` envelope) and converts to flat snake_case
+- All downstream modules continue to work unchanged on both CLI 2.83 (SDK 40) and CLI 2.85+ (SDK 41)
+- Long-term direction: refactor to direct SDK attribute access (Approach C), aligned with AKS CLI team patterns
+
+**Files modified:** `cluster_data_collector.py`
+
+See [SDK41-COMPAT-ANALYSIS.md](SDK41-COMPAT-ANALYSIS.md) for the full analysis.
+
 ### WI-1: Outbound Type `none` and `block` Support
 
 Added recognition of network-isolated clusters using outbound type `none` or `block`.

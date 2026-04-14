@@ -21,6 +21,43 @@ from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 from .models import Finding, FindingCode, Severity
 
 
+def _camel_to_snake(name: str) -> str:
+    """Convert camelCase or PascalCase key to snake_case.
+
+    Handles consecutive capitals (e.g. 'enableRBAC' -> 'enable_rbac',
+    'agentPoolProfiles' -> 'agent_pool_profiles').
+    """
+    s1 = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', name)
+    return re.sub(r'([a-z\d])([A-Z])', r'\1_\2', s1).lower()
+
+
+def _normalize_sdk_dict(d):
+    """Normalize SDK as_dict() output to flat snake_case structure.
+
+    SDK 41 (azure-mgmt-containerservice 41.0.0, shipped with CLI 2.85) changed
+    as_dict() to return camelCase keys nested under a 'properties' envelope.
+    SDK 40 (CLI <=2.83) returns flat snake_case keys.
+
+    This function detects the SDK 41 format and converts it so all downstream
+    code can use the same .get("snake_case_key") pattern regardless of SDK version.
+    """
+    if isinstance(d, list):
+        return [_normalize_sdk_dict(item) for item in d]
+    if not isinstance(d, dict):
+        return d
+
+    # Detect SDK 41 format: presence of 'properties' envelope with nested dict
+    if 'properties' in d and isinstance(d.get('properties'), dict):
+        props = d.pop('properties')
+        d.update(props)
+
+    # Convert all keys to snake_case and recurse into values
+    return {
+        _camel_to_snake(k): _normalize_sdk_dict(v)
+        for k, v in d.items()
+    }
+
+
 def _to_dict(obj: Any) -> Any:
     """
     Convert Azure SDK object to dictionary recursively.
@@ -32,7 +69,8 @@ def _to_dict(obj: Any) -> Any:
         Dictionary representation or primitive value
     """
     if hasattr(obj, 'as_dict'):
-        return obj.as_dict()
+        result = obj.as_dict()
+        return _normalize_sdk_dict(result)
     if isinstance(obj, dict):
         return {k: _to_dict(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
