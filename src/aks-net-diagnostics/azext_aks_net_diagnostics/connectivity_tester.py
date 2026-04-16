@@ -116,6 +116,23 @@ class ConnectivityTester:
         if provisioning_state.lower() == "failed":
             self.logger.info("Cluster is in failed state. Connectivity tests may not be reliable.")
 
+        # Check if cluster is still being created/updated — nodes may not be ready
+        if provisioning_state.lower() in ("creating", "updating"):
+            self.logger.warning(
+                "  Connectivity tests skipped: Cluster is in '%s' state. "
+                "Node instances may not be ready for RunCommand execution. "
+                "Wait for provisioning to complete and retry.",
+                provisioning_state
+            )
+            self.probe_results = {
+                "enabled": False,
+                "skipped": True,
+                "reason": f"Cluster is in {provisioning_state} state",
+                "tests": [],
+                "summary": {"total_tests": 0, "passed": 0, "failed": 0, "errors": 0},
+            }
+            return self.probe_results
+
         self.logger.info("Starting active connectivity probes from VMSS instances...")
 
         # Initialize probe results
@@ -128,7 +145,14 @@ class ConnectivityTester:
         # Get node instances for testing (VMSS or VM, limited to first available for performance)
         node_instances = self._list_ready_node_instances()
         if not node_instances:
-            self.logger.info("No node instances found for connectivity testing")
+            self.logger.warning(
+                "  Connectivity tests skipped: No node instances in 'Succeeded' provisioning state found "
+                "in MC_ resource group. Nodes may still be provisioning."
+            )
+            self.probe_results["skipped"] = True
+            self.probe_results["reason"] = self.probe_results.get(
+                "reason", "No ready node instances found"
+            )
             return self.probe_results
 
         # Run connectivity tests on only the first available node to avoid long execution times
