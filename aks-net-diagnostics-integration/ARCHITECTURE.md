@@ -247,6 +247,45 @@ def run_diagnostics(
 
 Between phases the orchestrator enriches agent pool data with subnet CIDRs from actual VMSS/VM NICs (helper functions `_enrich_agent_pools_with_vmss_subnets`, `_enrich_agent_pools_with_vm_subnets`), runs NAP analysis for Karpenter VM detection (`_analyze_nap`, `_classify_nap_vms`, `_classify_nap_vmss`), and collects/deduplicates permission findings from all analyzers.
 
+### Where Findings Come From (Findings Model)
+
+Findings come from **multiple sources**, not just the `MisconfigurationAnalyzer`. The orchestrator merges them all into a single list before reporting:
+
+| Source | Role | Example Finding Codes |
+|--------|------|-----------------------|
+| `DNSAnalyzer`, `NSGAnalyzer`, `OutboundConnectivityAnalyzer` | Emit their **own** findings directly via `add_finding()` / `self.findings` while analyzing their domain | `PRIVATE_DNS_MISCONFIGURED`, `NSG_INTER_NODE_BLOCKED`, `NSG_BLOCKING_AKS_TRAFFIC`, `OUTBOUND_TYPE_NONE`, `HTTP_PROXY_CONFIGURED`, `PROXY_NOT_REACHABLE` |
+| `ClusterDataCollector` | Emits **permission findings only** when Azure API calls fail (graceful degradation) | `PERMISSION_INSUFFICIENT_VNET`, `PERMISSION_INSUFFICIENT_VMSS`, `PERMISSION_INSUFFICIENT_LB` |
+| `MisconfigurationAnalyzer` | **Cross-component correlation**: consumes the *outputs* of all other analyzers to detect composite issues no single analyzer can see | `CLUSTER_OPERATION_FAILURE`, `CLUSTER_STOPPED`, `BOOTSTRAP_ACR_DNS_NOT_LINKED`, `PRIVATE_DNS_MISCONFIGURED` |
+| NAP analysis (orchestrator helpers) | Karpenter/NAP-specific findings | NAP findings |
+| Pure collectors/analyzers (`RouteTableAnalyzer`, `APIServerAccessAnalyzer`, `ConnectivityTester`, VMSS/VM collection) | Mostly return **analysis data** that feeds the correlation step; some emit permission findings | — |
+
+**Aggregation (Phase 9).** The orchestrator does the assembly, not any single analyzer:
+
+1. Runs `MisconfigurationAnalyzer.analyze(...)` to get the correlated findings.
+2. Extends the list with `permission_findings` collected from the data-collection phase.
+3. Explicitly harvests the per-analyzer findings from the DNS, NSG, and Outbound analyzers (excluding permission findings already added).
+4. Appends NAP findings.
+5. Passes the merged `findings` list to the `ReportGenerator`.
+
+So the correct mental model is: **individual analyzers produce their own domain findings, the `MisconfigurationAnalyzer` adds correlated/composite findings on top, and the orchestrator merges everything** into the final list the report renders.
+
+```mermaid
+flowchart TD
+    C["Collectors: cluster / VMSS / VM / VNet<br/>mostly data + permission findings"]
+    A1["DNS / NSG / Outbound analyzers<br/>data + their own findings"]
+    A2["Route / API server / Connectivity<br/>data only (+ some permission findings)"]
+    M["MisconfigurationAnalyzer<br/>correlates ALL outputs → composite findings"]
+    O["Orchestrator (Phase 9)<br/>merges ALL findings"]
+    R["ReportGenerator"]
+    C --> M
+    A1 --> M
+    A2 --> M
+    C --> O
+    A1 --> O
+    M --> O
+    O --> R
+```
+
 ### ClusterDataCollector (`cluster_data_collector.py`)
 
 Centralized Azure data gathering. Accepts individual SDK clients (AKS, AgentPools, Network, Compute).
@@ -347,7 +386,7 @@ Active probe testing using RunCommand on VMSS and VM node pools. Only runs when 
 
 ### MisconfigurationAnalyzer (`misconfiguration_analyzer.py`)
 
-Cross-component correlation engine. Receives results from all other analyzers and detects composite issues.
+Cross-component correlation engine. Receives the *results* of all other analyzers and detects composite issues that no single analyzer can see on its own. It is **one of several** finding sources: the DNS, NSG, and Outbound analyzers also emit their own findings directly (see [Where Findings Come From](#where-findings-come-from-findings-model)), and the orchestrator merges all of them in Phase 9.
 
 **Analyzes:**
 - Cluster provisioning failures and cluster stopped state
@@ -430,7 +469,7 @@ flowchart TD
     P5 --> P6["Phase 6: DNSAnalyzer.analyze()<br/>inputs: clients, cluster_info<br/>produces: private_dns_analysis"]
     P6 --> P7["Phase 7: APIServerAccessAnalyzer.analyze()<br/>inputs: cluster_info, outbound_ips, outbound_analysis<br/>produces: api_server_access_analysis"]
     P7 --> P8["Phase 8: ConnectivityTester.test_connectivity()<br/>only if --probe-test<br/>inputs: cluster_info, clients, dns_analyzer<br/>produces: api_probe_results"]
-    P8 --> P9["Phase 9: MisconfigurationAnalyzer.analyze()<br/>inputs: all above results + permission_findings<br/>produces: findings[]"]
+    P8 --> P9["Phase 9: MisconfigurationAnalyzer.analyze()<br/>inputs: all above results + permission_findings<br/>produces: correlated findings<br/>then orchestrator MERGES: correlated +<br/>permission + DNS/NSG/Outbound analyzer findings + NAP<br/>→ findings[]"]
     P9 --> P10["Phase 10: ReportGenerator<br/>inputs: all results + findings<br/>produces: console output, JSON file, result dict"]
 ```
 
